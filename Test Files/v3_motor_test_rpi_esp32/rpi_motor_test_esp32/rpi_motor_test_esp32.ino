@@ -25,6 +25,12 @@ static unsigned long status_led_off_at = 0;
 static const uint32_t BAUD_RPI      = 115200;  // USB Serial       ↔ Raspberry Pi
 static const uint32_t BAUD_ROBOCLAW =  38400;  // Hardware UART1   ↔ RoboClaw
 
+// Set true only while diagnosing RoboClaw read responses. With tracing enabled,
+// connect a second USB cable to the LEFT/native USB port and open its serial
+// monitor at 115200 baud. Replies remain binary-clean on Serial0 (the RIGHT
+// CH343 port connected to the Raspberry Pi) and are printed as hex on Serial.
+static const bool ENABLE_ROBOCLAW_RX_TRACE = false;
+
 // ── Hardware Serial instance ─────────────────────────────────────────────────
 HardwareSerial roboclawSerial(1);
 
@@ -79,12 +85,30 @@ void loop() {
 
   // RoboClaw → RPi: forward reply to BOTH USB streams
   bool received_roboclaw_reply = false;
+  uint8_t reply_bytes[64];
+  size_t reply_length = 0;
   while (roboclawSerial.available() > 0) {
     uint8_t b = roboclawSerial.read();
-    Serial.write(b);
     Serial0.write(b);
+    if (ENABLE_ROBOCLAW_RX_TRACE) {
+      if (reply_length < sizeof(reply_bytes)) {
+        reply_bytes[reply_length++] = b;
+      }
+    } else {
+      Serial.write(b);
+    }
     bytes_from_roboclaw++;
     received_roboclaw_reply = true;
+  }
+
+  if (ENABLE_ROBOCLAW_RX_TRACE && reply_length > 0) {
+    Serial.print("[RoboClaw RX]");
+    for (size_t i = 0; i < reply_length; ++i) {
+      Serial.print(" 0x");
+      if (reply_bytes[i] < 0x10) Serial.print('0');
+      Serial.print(reply_bytes[i], HEX);
+    }
+    Serial.println();
   }
 
   // If this LED never flashes during a Pi-side read request, GPIO 16 has not
