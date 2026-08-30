@@ -202,18 +202,42 @@ def main() -> None:
         print("       Run:  pip install basicmicro --break-system-packages")
         sys.exit(1)
 
-    print(f"Opening serial connection to ESP32 relay on {SERIAL_PORT} @ {BAUD_RATE} baud ...")
+    # Auto-detect serial port if default is not present
+    import os
+    import glob
+
+    port = SERIAL_PORT
+    if not os.path.exists(port):
+        # Look for QinHeng / ESP32 or any active ACM / USB tty
+        candidates = glob.glob("/dev/serial/by-id/*QinHeng*") + \
+                     glob.glob("/dev/serial/by-id/*Espressif*") + \
+                     glob.glob("/dev/serial/by-id/*") + \
+                     glob.glob("/dev/ttyACM*") + \
+                     glob.glob("/dev/ttyUSB*")
+        if candidates:
+            port = os.path.realpath(candidates[0])
+            print(f"[Auto-Detect] '{SERIAL_PORT}' not found, automatically using detected port: {port}")
+        else:
+            print(f"ERROR: No serial ports found. Make sure the ESP32 USB cable is connected!")
+            sys.exit(1)
+
+    print(f"Opening serial connection to ESP32 relay on {port} @ {BAUD_RATE} baud ...")
     print("  (Relay forwards to RoboClaw @ 38400 baud — do not change 115200 here)")
 
-    rc = Roboclaw(SERIAL_PORT, BAUD_RATE)
+    rc = Roboclaw(port, BAUD_RATE)
 
+    opened = False
     try:
-        rc.Open()
+        opened = rc.Open()
     except Exception as exc:
-        print(f"ERROR: Could not open {SERIAL_PORT}: {exc}")
+        print(f"ERROR: Exception while opening {port}: {exc}")
         sys.exit(1)
 
-    print(f"Connected.  RoboClaw address: 0x{ROBOCLAW_ADDR:02X}")
+    if opened is False:
+        print(f"ERROR: Could not open {port}. Check permissions (sudo usermod -a -G dialout $USER) or reconnect cable.")
+        sys.exit(1)
+
+    print(f"Connected to {port}. RoboClaw address: 0x{ROBOCLAW_ADDR:02X}")
 
     # ------------------------------------------------------------------ #
     # Comms sanity check — read main battery voltage                       #

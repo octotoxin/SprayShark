@@ -50,28 +50,39 @@ static uint8_t buf[BUF_SIZE];
 
 // ──────────────────────────────────────────────────────────────────────────────
 void setup() {
-  // USB Serial → Raspberry Pi
-  Serial.begin(BAUD_RPI);
+  // Test LED on Pin 17: blink 3 times on boot to prove Pin 17 is working
+  pinMode(PIN_ROBOCLAW_TX, OUTPUT);
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(PIN_ROBOCLAW_TX, HIGH);
+    delay(100);
+    digitalWrite(PIN_ROBOCLAW_TX, LOW);
+    delay(100);
+  }
 
-  // Hardware UART1 → RoboClaw (assigning custom RX/TX GPIOs via ESP32 Matrix)
+  // Initialize both USB-CDC (Left Port) and CH343 Hardware UART0 (Right Port)
+  Serial.begin(BAUD_RPI);
+  Serial0.begin(BAUD_RPI);
+
+  // Hardware UART1 → RoboClaw
   roboclawSerial.begin(BAUD_ROBOCLAW, SERIAL_8N1, PIN_ROBOCLAW_RX, PIN_ROBOCLAW_TX);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 void loop() {
-  // RPi → RoboClaw: forward any bytes arriving from the Raspberry Pi
-  int avail = Serial.available();
-  if (avail > 0) {
-    size_t toRead = (avail < (int)BUF_SIZE) ? (size_t)avail : BUF_SIZE;
-    size_t n = Serial.readBytes((char*)buf, toRead);
-    roboclawSerial.write(buf, n);
+  // RPi → RoboClaw: forward from Native USB (Serial)
+  while (Serial.available() > 0) {
+    roboclawSerial.write(Serial.read());
   }
 
-  // RoboClaw → RPi: forward any bytes arriving from the RoboClaw
-  avail = roboclawSerial.available();
-  if (avail > 0) {
-    size_t toRead = (avail < (int)BUF_SIZE) ? (size_t)avail : BUF_SIZE;
-    size_t n = roboclawSerial.readBytes((char*)buf, toRead);
-    Serial.write(buf, n);
+  // RPi → RoboClaw: forward from CH343 UART (Serial0)
+  while (Serial0.available() > 0) {
+    roboclawSerial.write(Serial0.read());
+  }
+
+  // RoboClaw → RPi: forward reply to BOTH USB streams
+  while (roboclawSerial.available() > 0) {
+    uint8_t b = roboclawSerial.read();
+    Serial.write(b);
+    Serial0.write(b);
   }
 }
