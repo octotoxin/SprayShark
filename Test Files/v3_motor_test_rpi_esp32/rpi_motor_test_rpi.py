@@ -118,26 +118,8 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     """
     print_header("PRE-FLIGHT DIAGNOSTIC PROBES")
 
-    # ── Probe 1: Firmware Version (Bidirectional Comms Probe) ───────────────
-    print("• [Probe 1/5] Querying RoboClaw Firmware Version ...", end=" ", flush=True)
-    try:
-        ver_result = rc.ReadVersion(addr)
-        # Result tuple: (version_str, valid_bool)
-        if ver_result and ver_result[1]:
-            ver_str = ver_result[0].strip().replace("\n", " ")
-            print(f"✅ OK\n  → Model / Firmware: \"{ver_str}\"")
-        else:
-            print("❌ FAILED")
-            print_communication_troubleshooting()
-            return False
-    except Exception as exc:
-        print("❌ EXCEPTION")
-        print(f"  → Details: {exc}")
-        print_communication_troubleshooting()
-        return False
-
-    # ── Probe 2: Main Battery Voltage ───────────────────────────────────────
-    print("• [Probe 2/5] Reading Main Battery Voltage ...", end=" ", flush=True)
+    # ── Probe 1: Main Battery Voltage ───────────────────────────────────────
+    print("• [Probe 1/4] Reading Main Battery Voltage ...", end=" ", flush=True)
     try:
         volt_result = rc.ReadMainBatteryVoltage(addr)
         if volt_result and volt_result[1]:
@@ -151,8 +133,8 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     except Exception as exc:
         print(f"⚠️ FAILED ({exc})")
 
-    # ── Probe 3: Logic Battery Voltage ──────────────────────────────────────
-    print("• [Probe 3/5] Reading Logic Voltage ...", end=" ", flush=True)
+    # ── Probe 2: Logic Battery Voltage ──────────────────────────────────────
+    print("• [Probe 2/4] Reading Logic Voltage ...", end=" ", flush=True)
     try:
         logic_result = rc.ReadLogicBatteryVoltage(addr)
         if logic_result and logic_result[1]:
@@ -163,8 +145,8 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     except Exception:
         print("ℹ️ Skipped (Standard unified rail)")
 
-    # ── Probe 4: Board Temperature ──────────────────────────────────────────
-    print("• [Probe 4/5] Reading Board Temperature ...", end=" ", flush=True)
+    # ── Probe 3: Board Temperature ──────────────────────────────────────────
+    print("• [Probe 3/4] Reading Board Temperature ...", end=" ", flush=True)
     try:
         temp_result = rc.ReadTemperature(addr)
         if temp_result and temp_result[1]:
@@ -176,8 +158,8 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     except Exception:
         print("⚠️ Skipped")
 
-    # ── Probe 5: Error / Fault Register ─────────────────────────────────────
-    print("• [Probe 5/5] Checking Error Register ...", end=" ", flush=True)
+    # ── Probe 4: Error / Fault Register ─────────────────────────────────────
+    print("• [Probe 4/4] Checking Error Register ...", end=" ", flush=True)
     has_faults = check_and_report_faults(rc, addr, context="pre-flight check")
     if not has_faults:
         print("✅ CLEAN (No active faults)")
