@@ -181,11 +181,25 @@ def run_test(rc, addr: int) -> None:
 
 
 def main() -> None:
-    # Import here so a missing package gives a clean error message
+    # Import basicmicro / roboclaw library with fallback support
+    Roboclaw = None
     try:
-        from basicmicro import Roboclaw
+        from basicmicro import Basicmicro as Roboclaw
     except ImportError:
-        print("ERROR: 'basicmicro' package not found.  Run:  pip install basicmicro")
+        try:
+            from basicmicro import Roboclaw
+        except ImportError:
+            try:
+                from roboclaw_3 import Roboclaw
+            except ImportError:
+                try:
+                    from roboclaw import Roboclaw
+                except ImportError:
+                    pass
+
+    if Roboclaw is None:
+        print("ERROR: 'basicmicro' package not found or could not be loaded.")
+        print("       Run:  pip install basicmicro --break-system-packages")
         sys.exit(1)
 
     print(f"Opening serial connection to ESP32 relay on {SERIAL_PORT} @ {BAUD_RATE} baud ...")
