@@ -1,16 +1,25 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 
+// Target board: Freenove ESP32-S3 WROOM (dual USB-port development board).
+
 // ── Pin assignments for RoboClaw UART link ──────────────────────────────────
+// RoboClaw Multi-Unit Mode must remain OFF so S2 provides a normal UART TX
+// signal for replies and command acknowledgements back to GPIO 16.
 static const int PIN_ROBOCLAW_RX = 16;  // ESP32 receives from RoboClaw (S2)
 static const int PIN_ROBOCLAW_TX = 17;  // ESP32 transmits to  RoboClaw (S1)
 
-// Optional onboard LED pin for activity blinking (GPIO 2 / 21 depending on board)
+// Status LED: flashes only when a byte arrives from the RoboClaw on S2.
+// This is intentionally separate from the USB serial streams so it cannot
+// corrupt the packet-serial replies forwarded to the Raspberry Pi.
 #ifdef LED_BUILTIN
   static const int PIN_STATUS_LED = LED_BUILTIN;
 #else
   static const int PIN_STATUS_LED = 2;
 #endif
+
+static const uint32_t STATUS_LED_PULSE_MS = 50;
+static unsigned long status_led_off_at = 0;
 
 // ── Baud rates ───────────────────────────────────────────────────────────────
 static const uint32_t BAUD_RPI      = 115200;  // USB Serial       ↔ Raspberry Pi
@@ -39,12 +48,21 @@ void setup() {
   Serial.begin(BAUD_RPI);
   Serial0.begin(BAUD_RPI);
 
+  pinMode(PIN_STATUS_LED, OUTPUT);
+  digitalWrite(PIN_STATUS_LED, LOW);
+
   // 3. Hardware UART1 → RoboClaw
   roboclawSerial.begin(BAUD_ROBOCLAW, SERIAL_8N1, PIN_ROBOCLAW_RX, PIN_ROBOCLAW_TX);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 void loop() {
+  // End a previously scheduled reply-activity pulse without blocking UART work.
+  if (status_led_off_at != 0 && millis() >= status_led_off_at) {
+    digitalWrite(PIN_STATUS_LED, LOW);
+    status_led_off_at = 0;
+  }
+
   // RPi → RoboClaw: forward from Native USB (Serial)
   while (Serial.available() > 0) {
     uint8_t c = Serial.read();
@@ -60,10 +78,20 @@ void loop() {
   }
 
   // RoboClaw → RPi: forward reply to BOTH USB streams
+  bool received_roboclaw_reply = false;
   while (roboclawSerial.available() > 0) {
     uint8_t b = roboclawSerial.read();
     Serial.write(b);
     Serial0.write(b);
     bytes_from_roboclaw++;
+    received_roboclaw_reply = true;
+  }
+
+  // If this LED never flashes during a Pi-side read request, GPIO 16 has not
+  // received a reply from RoboClaw S2. If it flashes but Python still times
+  // out, the issue is downstream in the ESP32-to-Pi USB serial path.
+  if (received_roboclaw_reply) {
+    digitalWrite(PIN_STATUS_LED, HIGH);
+    status_led_off_at = millis() + STATUS_LED_PULSE_MS;
   }
 }
