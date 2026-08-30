@@ -1,187 +1,329 @@
 #!/usr/bin/env python3
 """
-rpi_motor_test_rpi.py  (ESP32 relay edition)
-=============================================
-Test script for driving a single DC motor on Channel M1 of a
-BasicMicro RoboClaw 2x30A motor controller via a transparent serial relay.
+rpi_motor_test_rpi.py — SprayShark v3 Motor Diagnostic & Test Suite
+====================================================================
+Advanced diagnostic and motor test utility for driving DC motors (Channel M1)
+on a BasicMicro RoboClaw 2x30A controller via an ESP32-S3 hardware serial relay.
 
-Communication chain:
-    Raspberry Pi 5  -->  ESP32-S3 (USB/Serial2 relay)  -->  RoboClaw 2x30A
-    (this script)        /dev/ttyACM0 @ 115200 baud         UART @ 38400 baud
+Architecture:
+    Raspberry Pi 5  ──►  ESP32-S3 (USB/UART Relay)  ──►  RoboClaw 2x30A
+    (Python Script)      /dev/ttyACM0 @ 115200 baud       Hardware UART @ 38400 baud
 
-NOTE ON BAUD RATE:
-    The serial port opened here uses 115200 baud because that is the rate at
-    which the ESP32's USB Serial link talks to the Pi.  The RoboClaw itself
-    is configured at 38400 baud; the ESP32 bridges the two using hardware
-    Serial2.
-    DO NOT change 115200 here to 38400 — that would break the Pi↔ESP32 link.
-
-PROOF-OF-CONCEPT NOTE:
-    This is a demo-only test script for SprayShark v3.  It validates the
-    Pi ↔ ESP32 ↔ RoboClaw communication chain with the new brusher motors.
-
-Dependencies:
-    pip install basicmicro
-
-Usage:
-    python3 rpi_motor_test_rpi.py
+Features:
+    • Automatic serial port discovery across /dev/serial/by-id, /dev/ttyACM*, /dev/ttyUSB*
+    • Comprehensive hardware & communication pre-flight diagnostic probes
+    • Real-time telemetry monitoring (Battery voltage, motor currents, board temperature)
+    • Detailed fault bitmask decoding with human-readable error descriptions
+    • Graceful multi-stage open-loop ramping with safety failsafe cutoffs
 """
 
-import time
 import sys
+import os
+import glob
+import time
 
 # --------------------------------------------------------------------------- #
-# Configuration — edit these to match your hardware setup                     #
+# Configuration                                                               #
 # --------------------------------------------------------------------------- #
 
-SERIAL_PORT   = "/dev/ttyACM0"   # ESP32's USB serial device on the Pi
-BAUD_RATE     = 115200            # Pi↔ESP32 baud rate (NOT the RoboClaw rate)
-ROBOCLAW_ADDR = 0x80             # Default RoboClaw packet-serial address
+DEFAULT_PORT  = "/dev/ttyACM0"   # Default device node on the Raspberry Pi
+BAUD_RATE     = 115200            # Pi ↔ ESP32 baud rate (NOT RoboClaw rate)
+ROBOCLAW_ADDR = 0x80             # Default RoboClaw Packet Serial Address (128)
 
-# Open-loop duty cycle range: basicmicro uses –32767 … +32767
-# 50 % forward  = +16383,  50 % reverse = –16383
+# Duty scale: BasicMicro packet serial uses -32767 ... +32767
 DUTY_FULL_SCALE = 32767
-DUTY_50_PCT     = int(DUTY_FULL_SCALE * 0.50)   # ≈ 16383
+DUTY_50_PCT     = int(DUTY_FULL_SCALE * 0.50)  # ≈ 16383
 
 # --------------------------------------------------------------------------- #
-# Helpers                                                                      #
+# Error Register Bitmask Definitions                                          #
 # --------------------------------------------------------------------------- #
+
+FAULT_FLAGS = {
+    0x000001: ("E-STOP", "Emergency Stop input is active / triggered"),
+    0x000002: ("Temperature Warning", "Board temperature exceeds warning threshold (> 85°C)"),
+    0x000004: ("Temperature2 Warning", "Secondary sensor temperature warning"),
+    0x000008: ("Main Battery High", "Main battery voltage exceeds maximum safe cutoff (> 34V)"),
+    0x000010: ("Logic Battery High", "Logic battery voltage exceeds maximum safe level"),
+    0x000020: ("Logic Battery Low", "Logic battery voltage is below minimum operating level (< 6V)"),
+    0x000040: ("M1 Driver Fault", "Motor 1 MOSFET driver / gate fault detected"),
+    0x000080: ("M2 Driver Fault", "Motor 2 MOSFET driver / gate fault detected"),
+    0x000100: ("Main Battery High Warning", "Main battery voltage approaching high limit"),
+    0x000200: ("Main Battery Low Warning", "Main battery voltage approaching low limit (< 11V)"),
+    0x000400: ("Temperature Error", "Board over-temperature thermal shutdown (> 100°C)"),
+    0x000800: ("Temperature2 Error", "Secondary sensor over-temperature shutdown"),
+    0x001000: ("M1 Home", "Motor 1 Home switch / limit active"),
+    0x002000: ("M2 Home", "Motor 2 Home switch / limit active"),
+    0x010000: ("Overcurrent M1", "Motor 1 current exceeded maximum current limit"),
+    0x020000: ("Overcurrent M2", "Motor 2 current exceeded maximum current limit"),
+}
+
+# --------------------------------------------------------------------------- #
+# Helper Functions                                                            #
+# --------------------------------------------------------------------------- #
+
+def print_header(title: str) -> None:
+    """Print a visually distinct section header."""
+    print("\n" + "═" * 70)
+    print(f"  {title}")
+    print("═" * 70)
+
+
+def print_box(lines: list, title: str = "") -> None:
+    """Print an alert/info box for formatted diagnostic output."""
+    width = 68
+    print("┌" + "─" * (width) + "┐")
+    if title:
+        print(f"│  {title:<{width-2}}│")
+        print("├" + "─" * (width) + "┤")
+    for line in lines:
+        print(f"│  {line:<{width-2}}│")
+    print("└" + "─" * (width) + "┘")
+
 
 def duty_percent_to_raw(pct: float) -> int:
-    """Convert a duty-cycle percentage (–100 … +100) to a raw duty value."""
+    """Convert duty cycle percentage (-100% ... +100%) to raw integer (-32767 ... +32767)."""
     raw = int((pct / 100.0) * DUTY_FULL_SCALE)
     return max(-DUTY_FULL_SCALE, min(DUTY_FULL_SCALE, raw))
 
 
-def set_duty(rc, addr: int, raw_duty: int) -> None:
+def auto_detect_serial_port() -> str:
+    """Scan and return the most probable serial port for the ESP32 relay."""
+    if os.path.exists(DEFAULT_PORT):
+        return DEFAULT_PORT
+
+    # Priority search: by-id hardware names, then ACM nodes, then USB nodes
+    candidates = (
+        glob.glob("/dev/serial/by-id/*QinHeng*") +
+        glob.glob("/dev/serial/by-id/*Espressif*") +
+        glob.glob("/dev/serial/by-id/*") +
+        glob.glob("/dev/ttyACM*") +
+        glob.glob("/dev/ttyUSB*")
+    )
+    if candidates:
+        detected = os.path.realpath(candidates[0])
+        print(f"  [AUTO-DETECT] '{DEFAULT_PORT}' not found. Resolved active port: {detected}")
+        return detected
+
+    return DEFAULT_PORT
+
+
+# --------------------------------------------------------------------------- #
+# Diagnostic Probes                                                           #
+# --------------------------------------------------------------------------- #
+
+def run_preflight_diagnostics(rc, addr: int) -> bool:
     """
-    Send an open-loop duty command to M1.
-    Raises RuntimeError if the command is not acknowledged.
+    Run comprehensive health and connectivity probes against the RoboClaw.
+    Returns True if communication is healthy, False if critical comms fail.
     """
+    print_header("PRE-FLIGHT DIAGNOSTIC PROBES")
+
+    # ── Probe 1: Firmware Version (Bidirectional Comms Probe) ───────────────
+    print("• [Probe 1/5] Querying RoboClaw Firmware Version ...", end=" ", flush=True)
+    try:
+        ver_result = rc.ReadVersion(addr)
+        # Result tuple: (version_str, valid_bool)
+        if ver_result and ver_result[1]:
+            ver_str = ver_result[0].strip().replace("\n", " ")
+            print(f"✅ OK\n  → Model / Firmware: \"{ver_str}\"")
+        else:
+            print("❌ FAILED")
+            print_communication_troubleshooting()
+            return False
+    except Exception as exc:
+        print("❌ EXCEPTION")
+        print(f"  → Details: {exc}")
+        print_communication_troubleshooting()
+        return False
+
+    # ── Probe 2: Main Battery Voltage ───────────────────────────────────────
+    print("• [Probe 2/5] Reading Main Battery Voltage ...", end=" ", flush=True)
+    try:
+        volt_result = rc.ReadMainBatteryVoltage(addr)
+        if volt_result and volt_result[1]:
+            voltage_v = volt_result[0] / 10.0
+            status_tag = "✅ NORMAL" if voltage_v >= 11.0 else "⚠️ LOW VOLTAGE WARNING"
+            print(f"✅ OK\n  → Main Battery: {voltage_v:.1f} V ({status_tag})")
+            if voltage_v < 6.0:
+                print("  [CRITICAL] Battery voltage < 6.0V! Motor drive logic will not operate.")
+        else:
+            print("⚠️ INVALID DATA")
+    except Exception as exc:
+        print(f"⚠️ FAILED ({exc})")
+
+    # ── Probe 3: Logic Battery Voltage ──────────────────────────────────────
+    print("• [Probe 3/5] Reading Logic Voltage ...", end=" ", flush=True)
+    try:
+        logic_result = rc.ReadLogicBatteryVoltage(addr)
+        if logic_result and logic_result[1]:
+            logic_v = logic_result[0] / 10.0
+            print(f"✅ OK\n  → Logic Rail: {logic_v:.1f} V")
+        else:
+            print("ℹ️ Shared with Main Battery")
+    except Exception:
+        print("ℹ️ Skipped (Standard unified rail)")
+
+    # ── Probe 4: Board Temperature ──────────────────────────────────────────
+    print("• [Probe 4/5] Reading Board Temperature ...", end=" ", flush=True)
+    try:
+        temp_result = rc.ReadTemperature(addr)
+        if temp_result and temp_result[1]:
+            temp_c = temp_result[0] / 10.0
+            temp_f = (temp_c * 9/5) + 32
+            print(f"✅ OK\n  → Temp: {temp_c:.1f}°C / {temp_f:.1f}°F")
+        else:
+            print("⚠️ Unavailable")
+    except Exception:
+        print("⚠️ Skipped")
+
+    # ── Probe 5: Error / Fault Register ─────────────────────────────────────
+    print("• [Probe 5/5] Checking Error Register ...", end=" ", flush=True)
+    has_faults = check_and_report_faults(rc, addr, context="pre-flight check")
+    if not has_faults:
+        print("✅ CLEAN (No active faults)")
+
+    print("\n  [Summary] Pre-flight communication verified successfully.")
+    return True
+
+
+def check_and_report_faults(rc, addr: int, context: str = "") -> bool:
+    """Read error register and print detailed breakdown of any active faults."""
+    try:
+        result = rc.ReadError(addr)
+        if not result or not result[1]:
+            print(f"  [WARN] ReadError returned invalid response{' — ' + context if context else ''}")
+            return False
+
+        status = result[0]
+        if status == 0:
+            return False  # No faults
+
+        active_faults = []
+        for mask, (name, desc) in FAULT_FLAGS.items():
+            if status & mask:
+                active_faults.append(f"{name} (0x{mask:06X}): {desc}")
+
+        tag = f" [{context}]" if context else ""
+        print(f"\n⚠️  ACTIVE FAULT DETECTED{tag} — Register: 0x{status:06X}")
+        for fault in active_faults:
+            print(f"    • {fault}")
+        return True
+
+    except Exception as exc:
+        print(f"  [WARN] Error checking fault register: {exc}")
+        return False
+
+
+def print_communication_troubleshooting() -> None:
+    """Print a troubleshooting guide when RoboClaw does not answer."""
+    lines = [
+        "RoboClaw did not respond to Packet Serial command (Timeout).",
+        "",
+        "HARDWARE CHECKLIST:",
+        "1. TX/RX Crossing: ESP32 Pin 17 (TX) → S1 (RX) | Pin 16 (RX) ← S2 (TX).",
+        "2. Breakout Board: Ensure wires are on the OUTER row (ESP32-S3).",
+        "3. Common Ground: ESP32 GND ('G') MUST connect to RoboClaw GND ('-').",
+        "4. Power: Main battery MUST be connected to RoboClaw heavy terminals.",
+        "5. RoboClaw Status: Verify Green STAT1 LED is on/blinking.",
+        "6. Mode Config: Mode 7 (Packet Serial), 38400 baud, Address 0x80 (128).",
+        "   (On v6e boards, check with Mode/Set buttons or Motion Studio).",
+    ]
+    print_box(lines, title="COMMUNICATION DIAGNOSTIC FAILURE")
+
+
+# --------------------------------------------------------------------------- #
+# Motor Control Routines                                                      #
+# --------------------------------------------------------------------------- #
+
+def set_duty_safe(rc, addr: int, raw_duty: int, label: str = "") -> None:
+    """Send an open-loop duty command with error trapping and feedback."""
+    pct = (raw_duty / DUTY_FULL_SCALE) * 100.0
     success = rc.DutyM1(addr, raw_duty)
     if not success:
-        raise RuntimeError(f"DutyM1 command failed (raw_duty={raw_duty})")
+        raise RuntimeError(f"DutyM1 command failed (Duty: {pct:+.1f}%, Raw: {raw_duty}) — {label}")
 
 
-def check_errors(rc, addr: int, context: str = "") -> None:
+def ramp_duty_verbose(rc, addr: int, start_pct: float, end_pct: float,
+                       duration_s: float, stage_name: str, steps: int = 40) -> None:
     """
-    Read the RoboClaw error/status register and print any active fault flags.
-    Returns silently if no faults are set.
-    """
-    result = rc.ReadError(addr)
-    # result is a tuple: (status_int, valid_bool)
-    if not result[1]:
-        print(f"  [WARN] ReadError() returned invalid data{' — ' + context if context else ''}")
-        return
-
-    status = result[0]
-    if status == 0:
-        return  # No faults
-
-    # Decode the BasicMicro fault-flag bitmask (datasheet §5 / Python library)
-    fault_flags = {
-        0x000001: "E-STOP",
-        0x000002: "Temperature Warning",
-        0x000004: "Temperature2 Warning",
-        0x000008: "Main Battery High",
-        0x000010: "Logic Battery High",
-        0x000020: "Logic Battery Low",
-        0x000040: "M1 Driver Fault",
-        0x000080: "M2 Driver Fault",
-        0x000100: "Main Battery High Warning",
-        0x000200: "Main Battery Low Warning",
-        0x000400: "Temperature Error",
-        0x000800: "Temperature2 Error",
-        0x001000: "M1 Home",
-        0x002000: "M2 Home",
-        0x010000: "Overcurrent M1",
-        0x020000: "Overcurrent M2",
-    }
-    active = [label for mask, label in fault_flags.items() if status & mask]
-    tag = f" [{context}]" if context else ""
-    print(f"  [FAULT{tag}] RoboClaw status=0x{status:06X}  →  {', '.join(active)}")
-
-
-def ramp_duty(rc, addr: int, start_pct: float, end_pct: float,
-              duration_s: float, steps: int = 50) -> None:
-    """
-    Linearly ramp the M1 duty cycle from start_pct to end_pct over duration_s.
-    Performs `steps` incremental DutyM1 commands with equal sleep intervals.
+    Ramp motor duty cycle linearly while streaming live telemetry diagnostics.
     """
     step_delay = duration_s / steps
+    print(f"\n[{stage_name}] Ramping M1: {start_pct:+.1f}% → {end_pct:+.1f}% over {duration_s:.1f}s ...")
+
     for i in range(steps + 1):
         pct = start_pct + (end_pct - start_pct) * (i / steps)
         raw = duty_percent_to_raw(pct)
-        set_duty(rc, addr, raw)
+        set_duty_safe(rc, addr, raw, label=stage_name)
+
+        # Print progress line every 10 steps
+        if i % 10 == 0 or i == steps:
+            # Query active motor current
+            current_str = ""
+            try:
+                cur = rc.ReadCurrents(addr)
+                if cur and cur[1]:
+                    i_m1 = cur[0] / 100.0  # Returns 10mA units
+                    current_str = f" | Current: {i_m1:.2f} A"
+            except Exception:
+                pass
+
+            print(f"  → [{i*100//steps:3d}%] Duty: {pct:+6.1f}% (Raw: {raw:+6d}){current_str}")
+
         time.sleep(step_delay)
 
 
 # --------------------------------------------------------------------------- #
-# Main test sequence                                                           #
+# Main Motor Test Sequence                                                    #
 # --------------------------------------------------------------------------- #
 
-def run_test(rc, addr: int) -> None:
-    """Execute the full motor test sequence on M1."""
+def execute_motor_test_sequence(rc, addr: int) -> None:
+    """Execute the complete 6-stage motor test sequence."""
+    print_header("STARTING M1 MOTOR TEST SEQUENCE")
 
-    print("\n" + "=" * 60)
-    print("RoboClaw M1 Open-Loop Test Sequence  (ESP32 relay)")
-    print("=" * 60)
+    # ── Stage 1: Forward Ramp (0% → +50%) ──────────────────────────────────
+    ramp_duty_verbose(rc, addr, start_pct=0, end_pct=50, duration_s=2.0, stage_name="Stage 1: Forward Ramp-Up")
+    check_and_report_faults(rc, addr, context="post forward ramp")
 
-    # ------------------------------------------------------------------ #
-    # Stage 1 – Ramp 0 % → +50 % forward over 2 s                        #
-    # ------------------------------------------------------------------ #
-    print("\n[Stage 1] Ramping M1 forward: 0 % → +50 % over 2 s ...")
-    ramp_duty(rc, addr, start_pct=0, end_pct=50, duration_s=2.0)
-    check_errors(rc, addr, context="after forward ramp-up")
+    # ── Stage 2: Forward Hold (+50% for 2s) ────────────────────────────────
+    print("\n[Stage 2: Forward Hold] Holding M1 at +50% for 2.0s ...")
+    set_duty_safe(rc, addr, DUTY_50_PCT, label="Hold +50%")
+    for sec in range(1, 3):
+        time.sleep(1.0)
+        check_and_report_faults(rc, addr, context=f"forward hold second {sec}")
 
-    # ------------------------------------------------------------------ #
-    # Stage 2 – Hold at +50 % for 2 s                                     #
-    # ------------------------------------------------------------------ #
-    print("[Stage 2] Holding M1 at +50 % for 2 s ...")
-    set_duty(rc, addr, DUTY_50_PCT)
-    time.sleep(1.0)
-    check_errors(rc, addr, context="mid-hold forward")
-    time.sleep(1.0)
-    check_errors(rc, addr, context="end-hold forward")
-
-    # ------------------------------------------------------------------ #
-    # Stage 3 – Ramp +50 % → 0 % over 1 s, then pause 1 s               #
-    # ------------------------------------------------------------------ #
-    print("[Stage 3] Ramping M1 forward: +50 % → 0 % over 1 s ...")
-    ramp_duty(rc, addr, start_pct=50, end_pct=0, duration_s=1.0)
-    check_errors(rc, addr, context="after forward ramp-down")
-    print("          Pausing 1 s ...")
+    # ── Stage 3: Forward Ramp-Down (+50% → 0%) ──────────────────────────────
+    ramp_duty_verbose(rc, addr, start_pct=50, end_pct=0, duration_s=1.0, stage_name="Stage 3: Forward Ramp-Down")
+    check_and_report_faults(rc, addr, context="post forward ramp-down")
+    print("  → Pausing 1.0s in neutral ...")
     time.sleep(1.0)
 
-    # ------------------------------------------------------------------ #
-    # Stage 4 – Ramp 0 % → -50 % reverse over 2 s                        #
-    # ------------------------------------------------------------------ #
-    print("[Stage 4] Ramping M1 reverse: 0 % → -50 % over 2 s ...")
-    ramp_duty(rc, addr, start_pct=0, end_pct=-50, duration_s=2.0)
-    check_errors(rc, addr, context="after reverse ramp-up")
+    # ── Stage 4: Reverse Ramp (0% → -50%) ──────────────────────────────────
+    ramp_duty_verbose(rc, addr, start_pct=0, end_pct=-50, duration_s=2.0, stage_name="Stage 4: Reverse Ramp-Up")
+    check_and_report_faults(rc, addr, context="post reverse ramp")
 
-    # ------------------------------------------------------------------ #
-    # Stage 5 – Hold at -50 % for 2 s                                     #
-    # ------------------------------------------------------------------ #
-    print("[Stage 5] Holding M1 at -50 % for 2 s ...")
-    set_duty(rc, addr, -DUTY_50_PCT)
-    time.sleep(1.0)
-    check_errors(rc, addr, context="mid-hold reverse")
-    time.sleep(1.0)
-    check_errors(rc, addr, context="end-hold reverse")
+    # ── Stage 5: Reverse Hold (-50% for 2s) ────────────────────────────────
+    print("\n[Stage 5: Reverse Hold] Holding M1 at -50% for 2.0s ...")
+    set_duty_safe(rc, addr, -DUTY_50_PCT, label="Hold -50%")
+    for sec in range(1, 3):
+        time.sleep(1.0)
+        check_and_report_faults(rc, addr, context=f"reverse hold second {sec}")
 
-    # ------------------------------------------------------------------ #
-    # Stage 6 – Ramp -50 % → 0 % and stop                                #
-    # ------------------------------------------------------------------ #
-    print("[Stage 6] Ramping M1 reverse: -50 % → 0 % over 1 s ...")
-    ramp_duty(rc, addr, start_pct=-50, end_pct=0, duration_s=1.0)
-    check_errors(rc, addr, context="after reverse ramp-down")
+    # ── Stage 6: Reverse Ramp-Down (-50% → 0%) ─────────────────────────────
+    ramp_duty_verbose(rc, addr, start_pct=-50, end_pct=0, duration_s=1.0, stage_name="Stage 6: Reverse Ramp-Down")
+    check_and_report_faults(rc, addr, context="test completion")
 
-    print("\n[Done]  Test sequence complete.")
+    print_header("TEST SEQUENCE COMPLETED SUCCESSFULLY")
 
+
+# --------------------------------------------------------------------------- #
+# Main Entry Point                                                            #
+# --------------------------------------------------------------------------- #
 
 def main() -> None:
-    # Import basicmicro / roboclaw library with fallback support
+    print_header("SPRAYSHARK v3 — MOTOR TEST & DIAGNOSTICS")
+
+    # 1. Verify BasicMicro Library Installation
     Roboclaw = None
     try:
         from basicmicro import Basicmicro as Roboclaw
@@ -198,83 +340,64 @@ def main() -> None:
                     pass
 
     if Roboclaw is None:
-        print("ERROR: 'basicmicro' package not found or could not be loaded.")
-        print("       Run:  pip install basicmicro --break-system-packages")
+        print("\n❌ [ERROR] 'basicmicro' Python library is not installed.")
+        print("   Install it using:  pip install basicmicro --break-system-packages\n")
         sys.exit(1)
 
-    # Auto-detect serial port if default is not present
-    import os
-    import glob
+    # 2. Resolve Serial Port
+    target_port = auto_detect_serial_port()
 
-    port = SERIAL_PORT
-    if not os.path.exists(port):
-        # Look for QinHeng / ESP32 or any active ACM / USB tty
-        candidates = glob.glob("/dev/serial/by-id/*QinHeng*") + \
-                     glob.glob("/dev/serial/by-id/*Espressif*") + \
-                     glob.glob("/dev/serial/by-id/*") + \
-                     glob.glob("/dev/ttyACM*") + \
-                     glob.glob("/dev/ttyUSB*")
-        if candidates:
-            port = os.path.realpath(candidates[0])
-            print(f"[Auto-Detect] '{SERIAL_PORT}' not found, automatically using detected port: {port}")
-        else:
-            print(f"ERROR: No serial ports found. Make sure the ESP32 USB cable is connected!")
-            sys.exit(1)
+    print(f"• Serial Port:   {target_port}")
+    print(f"• Pi ↔ ESP32:    {BAUD_RATE} Baud (USB Serial)")
+    print(f"• ESP32 ↔ Motor: 38,400 Baud (Hardware UART1)")
+    print(f"• Target Node:   RoboClaw Address 0x{ROBOCLAW_ADDR:02X} ({ROBOCLAW_ADDR})")
 
-    print(f"Opening serial connection to ESP32 relay on {port} @ {BAUD_RATE} baud ...")
-    print("  (Relay forwards to RoboClaw @ 38400 baud — do not change 115200 here)")
+    # 3. Open Serial Connection
+    print(f"\nOpening connection to {target_port} ...", end=" ", flush=True)
+    rc = Roboclaw(target_port, BAUD_RATE)
 
-    rc = Roboclaw(port, BAUD_RATE)
-
-    opened = False
     try:
         opened = rc.Open()
     except Exception as exc:
-        print(f"ERROR: Exception while opening {port}: {exc}")
+        print(f"❌ FAILED\n[ERROR] Exception opening {target_port}: {exc}")
         sys.exit(1)
 
     if opened is False:
-        print(f"ERROR: Could not open {port}. Check permissions (sudo usermod -a -G dialout $USER) or reconnect cable.")
+        print(f"❌ FAILED\n[ERROR] Could not open {target_port}.")
+        print("   1. Verify your user is in the dialout group: sudo usermod -a -G dialout $USER")
+        print("   2. Make sure no other process (e.g. minicom or screen) is using the port.")
         sys.exit(1)
 
-    print(f"Connected to {port}. RoboClaw address: 0x{ROBOCLAW_ADDR:02X}")
+    print("✅ CONNECTED")
 
-    # ------------------------------------------------------------------ #
-    # Comms sanity check — read main battery voltage                       #
-    # ------------------------------------------------------------------ #
-    print("\n[Sanity check] Reading main battery voltage ...")
-    volt_result = rc.ReadMainBatteryVoltage(ROBOCLAW_ADDR)
-    if volt_result[1]:                     # tuple: (value, valid_bool)
-        voltage_v = volt_result[0] / 10.0  # RoboClaw returns tenths of a volt
-        print(f"  Main battery voltage: {voltage_v:.1f} V")
-    else:
-        print("  WARNING: Could not read battery voltage — check wiring/relay.")
+    # 4. Run Pre-flight Diagnostic Probes
+    healthy = run_preflight_diagnostics(rc, ROBOCLAW_ADDR)
+    if not healthy:
+        print("\n❌ [ABORT] Pre-flight checks failed. Resolving communication errors above before running motors.")
+        sys.exit(1)
 
-    # Initial error check before moving anything
-    print("[Sanity check] Reading RoboClaw error register ...")
-    check_errors(rc, ROBOCLAW_ADDR, context="startup")
-
-    # ------------------------------------------------------------------ #
-    # Motor test — always stop motor on exit                               #
-    # ------------------------------------------------------------------ #
+    # 5. Execute Motor Test Sequence
     try:
-        run_test(rc, ROBOCLAW_ADDR)
+        execute_motor_test_sequence(rc, ROBOCLAW_ADDR)
 
     except KeyboardInterrupt:
-        print("\n\n[Interrupted] Ctrl+C detected — stopping motor ...")
+        print("\n\n⚠️  [INTERRUPTED] User aborted test with Ctrl+C!")
 
     except Exception as exc:
-        print(f"\n[ERROR] Unexpected exception: {exc}")
+        print(f"\n❌ [ERROR] Runtime failure during test execution: {exc}")
         raise
 
     finally:
-        # Safety stop — runs on normal exit, Ctrl+C, and any exception
-        print("[Safety] Sending DutyM1 = 0 to stop motor ...")
+        # Failsafe Emergency Stop
+        print("\n[Safety Failsafe] Sending DutyM1 = 0 & DutyM2 = 0 stop command ...", end=" ", flush=True)
         try:
             rc.DutyM1(ROBOCLAW_ADDR, 0)
+            rc.DutyM2(ROBOCLAW_ADDR, 0)
+            print("✅ MOTORS STOPPED")
         except Exception as stop_exc:
-            print(f"  WARNING: Could not send stop command: {stop_exc}")
-        print("[Safety] Motor stop command sent.  Script exiting.")
+            print(f"⚠️  WARNING: Could not send stop command: {stop_exc}")
+
+        print("Test session closed cleanly.\n")
 
 
 if __name__ == "__main__":
