@@ -67,6 +67,12 @@ def packet(address: int, command: int, payload: bytes = b"") -> bytes:
     return body + bytes([(crc >> 8) & 0xFF, crc & 0xFF])
 
 
+def read_request(address: int, command: int) -> bytes:
+    # RoboClaw read commands send only address + command. The response carries
+    # the CRC; adding request CRC bytes here pollutes the next packet.
+    return bytes([address, command])
+
+
 def read_response(port: serial.Serial, expected_len: int, timeout_s: float) -> bytes:
     deadline = time.monotonic() + timeout_s
     response = bytearray()
@@ -81,11 +87,21 @@ def read_response(port: serial.Serial, expected_len: int, timeout_s: float) -> b
     return bytes(response)
 
 
+def response_crc_ok(address: int, command: int, response: bytes) -> bool:
+    if len(response) < 3:
+        return False
+
+    data = response[:-2]
+    received_crc = (response[-2] << 8) | response[-1]
+    expected_crc = crc16(bytes([address, command]) + data)
+    return received_crc == expected_crc
+
+
 def run_query(port: serial.Serial, address: int, command: int, expected_len: int, label: str) -> bytes:
     port.reset_input_buffer()
     port.reset_output_buffer()
 
-    request = packet(address, command)
+    request = read_request(address, command)
     print(f"\n{label}")
     print(f"  TX: {hex_bytes(request)}")
 
@@ -98,7 +114,7 @@ def run_query(port: serial.Serial, address: int, command: int, expected_len: int
         data = response[:-2]
         received_crc = (response[-2] << 8) | response[-1]
         expected_crc = crc16(bytes([address, command]) + data)
-        crc_status = "OK" if received_crc == expected_crc else "BAD"
+        crc_status = "OK" if response_crc_ok(address, command, response) else "BAD"
         print(f"  CRC: {crc_status} received=0x{received_crc:04X} expected=0x{expected_crc:04X}")
     else:
         print("  CRC: not enough bytes to check")
@@ -126,32 +142,32 @@ def parse_queries(address: int, responses: dict) -> None:
     print("\nInterpretation")
 
     main = responses.get(0x18, b"")
-    if len(main) == 4:
+    if len(main) == 4 and response_crc_ok(address, 0x18, main):
         value = (main[0] << 8) | main[1]
         print(f"  0x18 main battery: {value / 10.0:.1f} V")
     else:
-        print("  0x18 main battery: no valid-length response")
+        print("  0x18 main battery: no valid CRC response")
 
     currents = responses.get(0x31, b"")
-    if len(currents) == 6:
+    if len(currents) == 6 and response_crc_ok(address, 0x31, currents):
         m1 = int.from_bytes(currents[0:2], byteorder="big", signed=True) / 100.0
         m2 = int.from_bytes(currents[2:4], byteorder="big", signed=True) / 100.0
         print(f"  0x31 motor currents: M1={m1:.2f} A, M2={m2:.2f} A")
     else:
-        print("  0x31 motor currents: no valid-length response")
+        print("  0x31 motor currents: no valid CRC response")
 
     status = responses.get(0x5A, b"")
-    if len(status) == 6:
+    if len(status) == 6 and response_crc_ok(address, 0x5A, status):
         value = int.from_bytes(status[0:4], byteorder="big", signed=False)
         print(f"  0x5A status: 0x{value:08X}")
     else:
-        print("  0x5A status: no valid-length response")
+        print("  0x5A status: no valid CRC response")
 
     if all(len(responses.get(cmd, b"")) == 0 for cmd in (0x18, 0x31, 0x5A)):
         print("  No query returned bytes. The RoboClaw is ACKing writes but not answering read packets.")
-    elif len(responses.get(0x18, b"")) == 4 and len(responses.get(0x31, b"")) == 0:
+    elif response_crc_ok(address, 0x18, responses.get(0x18, b"")) and not response_crc_ok(address, 0x31, responses.get(0x31, b"")):
         print("  Basic reads work, but current/status reads do not. That points at command support or firmware/library mismatch.")
-    elif len(responses.get(0x31, b"")) == 6 or len(responses.get(0x5A, b"")) == 6:
+    elif response_crc_ok(address, 0x31, responses.get(0x31, b"")) or response_crc_ok(address, 0x5A, responses.get(0x5A, b"")):
         print("  Raw replies exist. If the main test still fails, the Python RoboClaw library is parsing/expecting the wrong response.")
 
 
