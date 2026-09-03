@@ -310,14 +310,14 @@ def execute_motor_test_sequence(rc, addr: int) -> None:
     print_header("STARTING M1 MOTOR TEST SEQUENCE")
 
     print("\n[Encoder Check] Capturing M1 encoder change during low-speed movement ...")
-    before = rc.ReadEncoderM1(addr)
+    before = rc.ReadEncM1(addr)
 
     # Command a controlled low-speed movement before the full test sequence.
     set_duty_safe(rc, addr, duty_percent_to_raw(10), label="Encoder check")
     time.sleep(2)
     set_duty_safe(rc, addr, 0, label="Encoder check stop")
 
-    after = rc.ReadEncoderM1(addr)
+    after = rc.ReadEncM1(addr)
 
     print(f"M1 Encoder before: {before}")
     print(f"M1 Encoder after : {after}")
