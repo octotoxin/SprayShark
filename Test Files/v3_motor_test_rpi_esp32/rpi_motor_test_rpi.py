@@ -162,9 +162,9 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     except Exception:
         print("⚠️ Skipped")
 
-    # ── Probe 4: Error / Fault Register ─────────────────────────────────────
-    print("• [Probe 4/4] Checking Error Register ...", end=" ", flush=True)
-    has_faults = check_and_report_faults(rc, addr, context="pre-flight check")
+    # ── Probe 4: RoboClaw Status Register ───────────────────────────────────
+    print("• [Probe 4/4] Checking RoboClaw Status Register ...", end=" ", flush=True)
+    has_faults = check_and_report_status(rc, addr, context="pre-flight check")
     if not has_faults:
         print("✅ CLEAN (No active faults)")
 
@@ -172,32 +172,73 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     return True
 
 
-def check_and_report_faults(rc, addr: int, context: str = "") -> bool:
-    """Read error register and print detailed breakdown of any active faults."""
+def check_and_report_status(rc, addr: int, context: str = "") -> bool:
+    """Read and decode the RoboClaw 32-bit status register."""
     try:
         result = rc.ReadError(addr)
-        print("DEBUG error_result", repr(result))
-        if not result or not result[1]:
-            print(f"  [WARN] ReadError returned invalid response{' — ' + context if context else ''}")
+
+        if not result or not result[0]:
+            print(f"  [WARN] Unable to read RoboClaw status"
+                  + (f" - {context}" if context else ""))
             return False
 
         status = result[1]
+
+        print(f"\nRoboClaw Status{f' [{context}]' if context else ''}: "
+              f"0x{status:08X}")
+
         if status == 0:
-            return False  # No faults
+            print("  ✓ No active status flags")
+            return False
 
-        active_faults = []
-        for mask, (name, desc) in FAULT_FLAGS.items():
+        fault_flags = {
+            0x00000001: ("E-STOP",
+                         "Emergency Stop is active"),
+            0x00000002: ("TEMPERATURE",
+                         "Temperature fault"),
+            0x00000004: ("TEMPERATURE 2",
+                         "Second temperature fault"),
+            0x00000040: ("M1 MOTOR FAULT",
+                         "M1 driver fault"),
+            0x00000080: ("M2 MOTOR FAULT",
+                         "M2 driver fault"),
+        }
+
+        warning_flags = {
+            0x01000000: ("SPEED ERROR WARNING",
+                         "Speed error limit warning"),
+            0x02000000: ("POSITION ERROR WARNING",
+                         "Position error limit warning"),
+        }
+
+        faults = []
+        warnings = 0
+
+        for mask, (name, description) in fault_flags.items():
             if status & mask:
-                active_faults.append(f"{name} (0x{mask:08X}): {desc}")
+                faults.append(
+                    f"• {name} (0x{mask:08X}): {description}"
+                )
 
-        tag = f" [{context}]" if context else ""
-        print(f"\n⚠️  ACTIVE FAULT DETECTED{tag} — Register: 0x{status:08X}")
-        for fault in active_faults:
-            print(f"    • {fault}")
-        return True
+        for mask, (name, description) in warning_flags.items():
+            if status & mask:
+                warnings += 1
+                print(
+                    f"  ⚠ {name} (0x{mask:08X}): {description}"
+                )
+
+        if faults:
+            print("  ❌ ACTIVE FAULTS:")
+            for fault in faults:
+                print(f"     {fault}")
+
+        if not faults and not warnings:
+            print("  ⚠ Unknown status bits are set")
+
+        return bool(faults)
 
     except Exception as exc:
-        print(f"  [WARN] Error checking fault register: {exc}")
+        print(f"  [WARN] Status check failed: {exc}")
         return False
 
 
@@ -268,37 +309,50 @@ def execute_motor_test_sequence(rc, addr: int) -> None:
     """Execute the complete 6-stage motor test sequence."""
     print_header("STARTING M1 MOTOR TEST SEQUENCE")
 
+    print("\n[Encoder Check] Capturing M1 encoder change during low-speed movement ...")
+    before = rc.ReadEncoderM1(addr)
+
+    # Command a controlled low-speed movement before the full test sequence.
+    set_duty_safe(rc, addr, duty_percent_to_raw(10), label="Encoder check")
+    time.sleep(2)
+    set_duty_safe(rc, addr, 0, label="Encoder check stop")
+
+    after = rc.ReadEncoderM1(addr)
+
+    print(f"M1 Encoder before: {before}")
+    print(f"M1 Encoder after : {after}")
+
     # ── Stage 1: Forward Ramp (0% → +50%) ──────────────────────────────────
     ramp_duty_verbose(rc, addr, start_pct=0, end_pct=50, duration_s=2.0, stage_name="Stage 1: Forward Ramp-Up")
-    check_and_report_faults(rc, addr, context="post forward ramp")
+    check_and_report_status(rc, addr, context="post forward ramp")
 
     # ── Stage 2: Forward Hold (+50% for 2s) ────────────────────────────────
     print("\n[Stage 2: Forward Hold] Holding M1 at +50% for 2.0s ...")
     set_duty_safe(rc, addr, DUTY_50_PCT, label="Hold +50%")
     for sec in range(1, 3):
         time.sleep(1.0)
-        check_and_report_faults(rc, addr, context=f"forward hold second {sec}")
+        check_and_report_status(rc, addr, context=f"forward hold second {sec}")
 
     # ── Stage 3: Forward Ramp-Down (+50% → 0%) ──────────────────────────────
     ramp_duty_verbose(rc, addr, start_pct=50, end_pct=0, duration_s=1.0, stage_name="Stage 3: Forward Ramp-Down")
-    check_and_report_faults(rc, addr, context="post forward ramp-down")
+    check_and_report_status(rc, addr, context="post forward ramp-down")
     print("  → Pausing 1.0s in neutral ...")
     time.sleep(1.0)
 
     # ── Stage 4: Reverse Ramp (0% → -50%) ──────────────────────────────────
     ramp_duty_verbose(rc, addr, start_pct=0, end_pct=-50, duration_s=2.0, stage_name="Stage 4: Reverse Ramp-Up")
-    check_and_report_faults(rc, addr, context="post reverse ramp")
+    check_and_report_status(rc, addr, context="post reverse ramp")
 
     # ── Stage 5: Reverse Hold (-50% for 2s) ────────────────────────────────
     print("\n[Stage 5: Reverse Hold] Holding M1 at -50% for 2.0s ...")
     set_duty_safe(rc, addr, -DUTY_50_PCT, label="Hold -50%")
     for sec in range(1, 3):
         time.sleep(1.0)
-        check_and_report_faults(rc, addr, context=f"reverse hold second {sec}")
+        check_and_report_status(rc, addr, context=f"reverse hold second {sec}")
 
     # ── Stage 6: Reverse Ramp-Down (-50% → 0%) ─────────────────────────────
     ramp_duty_verbose(rc, addr, start_pct=-50, end_pct=0, duration_s=1.0, stage_name="Stage 6: Reverse Ramp-Down")
-    check_and_report_faults(rc, addr, context="test completion")
+    check_and_report_status(rc, addr, context="test completion")
 
     print_header("TEST SEQUENCE COMPLETED SUCCESSFULLY")
 
