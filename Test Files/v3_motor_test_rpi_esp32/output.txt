@@ -1,0 +1,100 @@
+══════════════════════════════════════════════════════════════════════
+  SPRAYSHARK v3 — MOTOR TEST & DIAGNOSTICS
+══════════════════════════════════════════════════════════════════════
+• Serial Port:   /dev/ttyACM0
+• Pi ↔ ESP32:    115200 Baud (USB Serial)
+• ESP32 ↔ Motor: 38,400 Baud (Hardware UART1)
+• Target Node:   RoboClaw Address 0x80 (128)
+
+Opening connection to /dev/ttyACM0 ... ✅ CONNECTED
+
+══════════════════════════════════════════════════════════════════════
+  PRE-FLIGHT DIAGNOSTIC PROBES
+══════════════════════════════════════════════════════════════════════
+DEBUG Firmware Version= (True, 'USB Roboclaw 2x30A v4.4.9\n')
+• [Probe 1/4] Reading Main Battery Voltage ... ✅ OK
+  → Main Battery: 25.9 V (✅ NORMAL)
+• [Probe 2/4] Reading Logic Voltage ... DEBUG logic_result (1, 0)
+ℹ️ Shared with Main Battery
+• [Probe 3/4] Reading Board Temperature ... ⚠️ Skipped
+• [Probe 4/4] Checking RoboClaw Status Register ... 
+RoboClaw Status [pre-flight check]: 0x03000000
+  ⚠ SPEED ERROR WARNING (0x01000000): Speed error limit warning
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+✅ CLEAN (No active faults)
+
+  [Summary] Pre-flight communication verified successfully.
+
+══════════════════════════════════════════════════════════════════════
+  STARTING M1 MOTOR TEST SEQUENCE
+══════════════════════════════════════════════════════════════════════
+
+[Encoder Check] Capturing M1 encoder change during low-speed movement ...
+M1 Encoder before: (1, 0, 128)
+M1 Encoder after : (1, 4294965461, 130)
+
+[Stage 1: Forward Ramp-Up] Ramping M1: +0.0% → +50.0% over 2.0s ...
+  → [  0%] Duty:   +0.0% (Raw:     +0) | Current: 0.93 A
+  → [ 25%] Duty:  +12.5% (Raw:  +4095) | Current: 1.92 A
+  → [ 50%] Duty:  +25.0% (Raw:  +8191) | Current: 2.83 A
+  → [ 75%] Duty:  +37.5% (Raw: +12287) | Current: 2.80 A
+  → [100%] Duty:  +50.0% (Raw: +16383) | Current: 2.83 A
+
+RoboClaw Status [post forward ramp]: 0x03000000
+  ⚠ SPEED ERROR WARNING (0x01000000): Speed error limit warning
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+[Stage 2: Forward Hold] Holding M1 at +50% for 2.0s ...
+
+RoboClaw Status [forward hold second 1]: 0x02000000
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+RoboClaw Status [forward hold second 2]: 0x02000000
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+[Stage 3: Forward Ramp-Down] Ramping M1: +50.0% → +0.0% over 1.0s ...
+  → [  0%] Duty:  +50.0% (Raw: +16383) | Current: 1.89 A
+  → [ 25%] Duty:  +37.5% (Raw: +12287) | Current: 1.48 A
+  → [ 50%] Duty:  +25.0% (Raw:  +8191) | Current: 0.94 A
+  → [ 75%] Duty:  +12.5% (Raw:  +4095) | Current: 0.91 A
+  → [100%] Duty:   +0.0% (Raw:     +0) | Current: 0.60 A
+
+RoboClaw Status [post forward ramp-down]: 0x02000000
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+  → Pausing 1.0s in neutral ...
+
+[Stage 4: Reverse Ramp-Up] Ramping M1: +0.0% → -50.0% over 2.0s ...
+  → [  0%] Duty:   +0.0% (Raw:     +0)
+  → [ 25%] Duty:  -12.5% (Raw:  -4095) | Current: 2.22 A
+  → [ 50%] Duty:  -25.0% (Raw:  -8191) | Current: 2.80 A
+  → [ 75%] Duty:  -37.5% (Raw: -12287) | Current: 2.83 A
+  → [100%] Duty:  -50.0% (Raw: -16383) | Current: 2.83 A
+
+RoboClaw Status [post reverse ramp]: 0x03000000
+  ⚠ SPEED ERROR WARNING (0x01000000): Speed error limit warning
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+[Stage 5: Reverse Hold] Holding M1 at -50% for 2.0s ...
+
+RoboClaw Status [reverse hold second 1]: 0x02000000
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+RoboClaw Status [reverse hold second 2]: 0x02000000
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+[Stage 6: Reverse Ramp-Down] Ramping M1: -50.0% → +0.0% over 1.0s ...
+  → [  0%] Duty:  -50.0% (Raw: -16383) | Current: 1.89 A
+  → [ 25%] Duty:  -37.5% (Raw: -12287) | Current: 0.94 A
+  → [ 50%] Duty:  -25.0% (Raw:  -8191) | Current: 0.96 A
+  → [ 75%] Duty:  -12.5% (Raw:  -4095) | Current: 0.79 A
+  → [100%] Duty:   +0.0% (Raw:     +0)
+
+RoboClaw Status [test completion]: 0x02000000
+  ⚠ POSITION ERROR WARNING (0x02000000): Position error limit warning
+
+══════════════════════════════════════════════════════════════════════
+  TEST SEQUENCE COMPLETED SUCCESSFULLY
+══════════════════════════════════════════════════════════════════════
+
+[Safety Failsafe] Sending DutyM1 = 0 & DutyM2 = 0 stop command ... ✅ MOTORS STOPPED
+Test session closed cleanly.
