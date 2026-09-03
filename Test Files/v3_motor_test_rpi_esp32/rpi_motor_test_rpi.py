@@ -117,15 +117,18 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     Returns True if communication is healthy, False if critical comms fail.
     """
     print_header("PRE-FLIGHT DIAGNOSTIC PROBES")
-
+    version=rc.ReadVersion(addr)
+    print("DEBUG Firmware Version=",repr(version))
     # ── Probe 1: Main Battery Voltage ───────────────────────────────────────
     print("• [Probe 1/4] Reading Main Battery Voltage ...", end=" ", flush=True)
     try:
         volt_result = rc.ReadMainBatteryVoltage(addr)
+
         if volt_result and volt_result[1]:
-            voltage_v = volt_result[0] / 10.0
+            voltage_v = volt_result[1] / 10.0
             status_tag = "✅ NORMAL" if voltage_v >= 11.0 else "⚠️ LOW VOLTAGE WARNING"
             print(f"✅ OK\n  → Main Battery: {voltage_v:.1f} V ({status_tag})")
+
             if voltage_v < 6.0:
                 print("  [CRITICAL] Battery voltage < 6.0V! Motor drive logic will not operate.")
         else:
@@ -137,8 +140,9 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     print("• [Probe 2/4] Reading Logic Voltage ...", end=" ", flush=True)
     try:
         logic_result = rc.ReadLogicBatteryVoltage(addr)
+        print("DEBUG logic_result", repr(logic_result))
         if logic_result and logic_result[1]:
-            logic_v = logic_result[0] / 10.0
+            logic_v = logic_result[1] / 10.0
             print(f"✅ OK\n  → Logic Rail: {logic_v:.1f} V")
         else:
             print("ℹ️ Shared with Main Battery")
@@ -150,7 +154,7 @@ def run_preflight_diagnostics(rc, addr: int) -> bool:
     try:
         temp_result = rc.ReadTemperature(addr)
         if temp_result and temp_result[1]:
-            temp_c = temp_result[0] / 10.0
+            temp_c = temp_result[1] / 10.0
             temp_f = (temp_c * 9/5) + 32
             print(f"✅ OK\n  → Temp: {temp_c:.1f}°C / {temp_f:.1f}°F")
         else:
@@ -172,21 +176,22 @@ def check_and_report_faults(rc, addr: int, context: str = "") -> bool:
     """Read error register and print detailed breakdown of any active faults."""
     try:
         result = rc.ReadError(addr)
+        print("DEBUG error_result", repr(result))
         if not result or not result[1]:
             print(f"  [WARN] ReadError returned invalid response{' — ' + context if context else ''}")
             return False
 
-        status = result[0]
+        status = result[1]
         if status == 0:
             return False  # No faults
 
         active_faults = []
         for mask, (name, desc) in FAULT_FLAGS.items():
             if status & mask:
-                active_faults.append(f"{name} (0x{mask:06X}): {desc}")
+                active_faults.append(f"{name} (0x{mask:08X}): {desc}")
 
         tag = f" [{context}]" if context else ""
-        print(f"\n⚠️  ACTIVE FAULT DETECTED{tag} — Register: 0x{status:06X}")
+        print(f"\n⚠️  ACTIVE FAULT DETECTED{tag} — Register: 0x{status:08X}")
         for fault in active_faults:
             print(f"    • {fault}")
         return True
@@ -245,7 +250,7 @@ def ramp_duty_verbose(rc, addr: int, start_pct: float, end_pct: float,
             try:
                 cur = rc.ReadCurrents(addr)
                 if cur and cur[1]:
-                    i_m1 = cur[0] / 100.0  # Returns 10mA units
+                    i_m1 = cur[1] / 100.0  # Returns 10mA units
                     current_str = f" | Current: {i_m1:.2f} A"
             except Exception:
                 pass
