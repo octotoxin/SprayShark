@@ -18,7 +18,7 @@ This repository is organized around an ESP32-controlled robotic lawn-sprayer pro
     -   `motors.ino` — ESC ramping, emergency stop, and arming sequence.
     -   `bluetooth.ino` — Dabble packet parsing and robot command logic.
 -   `main_projects/sprayshark_v2_singlefile/` — a single-file variant of the same project for comparison or legacy use.
--   `test_files/v3_actuator_test/` — the active time-based actuator test workspace. Contains `v3_actuator_test_for_esp32.ino` and `v3_actuator_test_for_rpi.py`.
+-   `test_files/v3_actuator_test/` — the active current-sensed actuator travel-time test workspace. Contains `v3_actuator_test_for_esp32.ino` and `v3_actuator_test_for_rpi.py`.
 -   `test_files/v3_motor_test/` — wiring documentation and motor test firmware. Relevant files include `PINOUT_AND_WIRING.md` and the `rpi_motor_test_esp32.ino` sketch.
 -   `test_files/actuator/` and `test_files/actuator_calibration/` — actuator-focused test sketches and calibration experiments.
 -   `test_files/ble_sniffer/` — BLE traffic sniffing / packet debugging experiments.
@@ -34,14 +34,15 @@ Important repo-specific facts discovered from the code:
     -   `LPWM_PIN = 3` (retract)
     -   `R_EN_PIN = 4`
     -   `L_EN_PIN = 5`
-    -   `R_IS_PIN = 12`
-    -   `L_IS_PIN = 11`
+    -   `R_IS_PIN = 12` and `L_IS_PIN = 11` in the main-project source;
+        the current actuator-test wiring instead uses `R_IS_PIN = 6`
+        and `L_IS_PIN = 7`.
     -   `LIMIT_SWITCH_RIGHT_PIN = A0`
     -   `LIMIT_SWITCH_LEFT_PIN = A1`
 -   The main project also uses ESC pins `leftEscPin = 9` and `rightEscPin = 10` and a relay pin at `6` for the pump.
 -   The `Dabble` packet format includes action buttons and d-pad buttons, with `0xFF 0x01 0x01 0x01 0x02 [ACTION_BTNS] [DPAD_BTNS] ...` as the packet frame described in `other_info/dabble_codes.md`.
 -   The `main_projects/sprayshark_v2_multifile` code relies on `isOverturnLimitHit()` and a symmetric position model. This means actuator motion is governed by time and virtual position, not just raw duty-cycle commands.
--   The `v3_actuator_test` branch is intentionally focused on a single time-based actuator sequence and does not add endpoint sensing or closed-loop position control.
+-   The `v3_actuator_test` workspace measures limit-to-limit travel using BTS7960 current-sense outputs; it does not use the main project's limit switches or position model.
 
 ## 1. Project purpose and architecture
 
@@ -165,24 +166,18 @@ blindly while the drive system is mechanically loaded.
 
 ## 6. Linear actuator test requested on 2026-10-11
 
-The immediate software task is a **simple timed actuator test**, not
-endpoint positioning.
+The active test measures actuator travel time between physical endpoints
+by detecting the current increase when the actuator reaches a limit.
 
 Exactly two files are requested:
 
 -   `v3_actuator_test_for_esp32.ino`
 -   `v3_actuator_test_for_rpi.py`
 
-The desired sequence after the Pi sends one start command:
-
-1.  Extend for **10 seconds**.
-2.  Stop for **3 seconds**.
-3.  Retract for **10 seconds**.
-4.  Stop for **3 seconds**.
-5.  Mark the test complete and wait for another command.
-
-Total nominal sequence time: **26 seconds**, excluding startup and
-communication overhead.
+After the Pi sends a start command, the ESP32 reverses at each sensed
+limit, measures five traversals, and returns the average travel time to
+the Pi. `START` assumes the actuator starts extended; `START_RETRACTED`
+assumes it starts retracted.
 
 ### Raspberry Pi script requirements
 
@@ -206,8 +201,9 @@ communication overhead.
 -   Prevent a second test from starting while the first is active.
 -   Stop actuator outputs at startup and after the sequence.
 -   Send basic start/completion status messages.
--   Do not add endpoint sensing, position control, or positioning logic
-    for this specific test.
+-   Detect endpoints from R_IS/L_IS current sensing; do not use the
+    main project's limit switches or virtual-position logic in this
+    standalone test.
 -   Do not modify existing project files; create only the two named
     files.
 -   Provide build/flash instructions and the exact command to run the Pi
@@ -215,21 +211,29 @@ communication overhead.
 
 ### Implementation notes
 
-The two requested test files were created in
-`test_files/v3_actuator_test/`. The firmware uses the BTS7960 direction
-pins from `main_projects/sprayshark_v2_multifile/config.h`: GPIO 2
-extends, GPIO 3 retracts, and GPIO 4/5 enable the driver. It stops both
-direction outputs on startup and between/after movement phases. It does
-not use limit switches, current sensing, or position tracking.
+The two requested test files are in `test_files/v3_actuator_test/`. The
+firmware uses BTS7960 direction pins GPIO 2 (extend) and GPIO 3
+(retract), enable pins GPIO 4/5, and current-sense pins GPIO 6 (R_IS,
+extend) and GPIO 7 (L_IS, retract). These current-sense assignments
+match the actuator-test wiring and differ from the R_IS/L_IS assignments
+in the main project's `config.h`. In particular, GPIO 6 is the pump
+relay in the main project, so these configurations must not be treated
+as interchangeable. The test sketch stops both direction outputs at
+startup, detects a sustained current rise at each travel limit, and
+reverses after a short dead time.
 
-The standalone test protocol is newline-terminated `START` over USB
-serial at 115200 baud. On ESP32-S3, the sketch reads from both `Serial`
-and `Serial0` and mirrors status lines to both. Statuses include
-`TEST_STARTED`, `BUSY`, `UNKNOWN_COMMAND`, and `TEST_COMPLETE`. The
-sequence runs in a non-blocking `millis()` state machine. The Pi script
-defaults to `/dev/ttyACM0`, sends one `START`, prints received status
-lines, and times out if completion is not reported within 45 seconds.
-It uses pyserial, consistent with existing Pi scripts.
+The standalone test protocol accepts newline-terminated `START` or
+`START_RETRACTED` over USB serial at 115200 baud. `START` assumes the
+actuator starts extended and initially retracts; `START_RETRACTED`
+assumes it starts retracted and initially extends. The non-blocking
+state machine measures five consecutive limit-to-limit traversals and
+reports each time plus `AVERAGE_TRAVEL_MS=<milliseconds>`. It reports a
+travel timeout if current-based limit detection does not occur within
+20 seconds. On ESP32-S3, the sketch reads from both `Serial` and
+`Serial0` and mirrors status lines to both. The Pi script defaults to
+`/dev/ttyACM0`, supports `--start-position extended|retracted`,
+displays the reported average, and waits up to 120 seconds for
+completion. It uses pyserial, consistent with existing Pi scripts.
 
 Arduino CLI requires the sketch's main `.ino` filename to match its
 sketch directory. These required filenames do not match the existing
@@ -241,18 +245,19 @@ were not tested.
 
 ### Important interpretation
 
-This test is explicitly time-based. A 10-second run does **not** prove
-that the actuator reaches its mechanical endpoint. The test should be
-supervised, with the linkage clear and the robot safely supported. A
-travel timeout is the test duration itself; the agent should not add
-endpoint detection or claim endpoint confirmation.
+The test identifies endpoints from a sustained current increase, which
+is intended to indicate that the actuator has reached a mechanical
+limit. The configured current-rise threshold should be verified against
+the installed driver and actuator before use. The test should be
+supervised, with the linkage clear and the robot safely supported; stop
+it if the mechanism binds or the driver overheats.
 
-The pin assignments and BTS7960 driver name are confirmed in the
-project's `config.h`, but the actuator's voltage/current ratings must
-still be verified against the installed hardware before operation. The
-standalone `START` line protocol is specific to this test sketch; it is
-not the main project's BLE/Dabble control protocol or the RoboClaw
-packet-serial protocol.
+The test sketch's pin assignments and BTS7960 driver name reflect the
+current actuator-test wiring, but the actuator's voltage/current
+ratings must still be verified against the installed hardware before
+operation. The standalone serial protocol is specific to this test
+sketch; it is not the main project's BLE/Dabble control protocol or the
+RoboClaw packet-serial protocol.
 
 ## 7. Other electronics discussed
 
