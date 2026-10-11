@@ -21,6 +21,7 @@ import sys
 import os
 import glob
 import time
+from datetime import datetime
 
 # --------------------------------------------------------------------------- #
 # Configuration                                                               #
@@ -78,6 +79,11 @@ def print_box(lines: list, title: str = "") -> None:
     for line in lines:
         print(f"│  {line:<{width-2}}│")
     print("└" + "─" * (width) + "┘")
+
+
+def log_runtime_event(message: str) -> None:
+    """Emit a timestamped runtime message so the test flow is easy to follow."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
 
 def duty_percent_to_raw(pct: float) -> int:
@@ -277,28 +283,45 @@ def ramp_duty_verbose(rc, addr: int, start_pct: float, end_pct: float,
     Ramp motor duty cycle linearly while streaming live telemetry diagnostics.
     """
     step_delay = duration_s / steps
-    print(f"\n[{stage_name}] Ramping M1: {start_pct:+.1f}% → {end_pct:+.1f}% over {duration_s:.1f}s ...")
+    log_runtime_event(f"{stage_name}: starting ramp from {start_pct:+.1f}% to {end_pct:+.1f}% over {duration_s:.1f}s")
+    print(f"  [RAMP DETAILS] step count: {steps}, update interval: {step_delay:.3f}s")
 
+    last_status = None
     for i in range(steps + 1):
         pct = start_pct + (end_pct - start_pct) * (i / steps)
         raw = duty_percent_to_raw(pct)
+        log_runtime_event(f"  -> applying duty {pct:+6.1f}% (raw {raw:+6d}) for {stage_name}")
         set_duty_safe(rc, addr, raw, label=stage_name)
 
-        # Print progress line every 10 steps
-        if i % 10 == 0 or i == steps:
-            # Query active motor current
+        # Query active motor current and telemetry at a small set of checkpoints.
+        if i % 5 == 0 or i == steps:
             current_str = ""
+            voltage_str = ""
             try:
                 cur = rc.ReadCurrents(addr)
                 if cur and cur[1]:
-                    i_m1 = cur[1] / 100.0  # Returns 10mA units
+                    i_m1 = cur[1] / 100.0
                     current_str = f" | Current: {i_m1:.2f} A"
             except Exception:
                 pass
 
-            print(f"  → [{i*100//steps:3d}%] Duty: {pct:+6.1f}% (Raw: {raw:+6d}){current_str}")
+            try:
+                battery = rc.ReadMainBatteryVoltage(addr)
+                if battery and battery[1]:
+                    voltage_v = battery[1] / 10.0
+                    voltage_str = f" | Battery: {voltage_v:.1f} V"
+            except Exception:
+                pass
+
+            status = check_and_report_status(rc, addr, context=f"{stage_name} step {i}/{steps}")
+            if status != last_status:
+                last_status = status
+
+            print(f"  → [{i*100//steps:3d}%] Duty: {pct:+6.1f}% (Raw: {raw:+6d}){current_str}{voltage_str}")
 
         time.sleep(step_delay)
+
+    log_runtime_event(f"{stage_name}: ramp complete; final duty = {end_pct:+.1f}%")
 
 
 # --------------------------------------------------------------------------- #
@@ -311,46 +334,59 @@ def execute_motor_test_sequence(rc, addr: int) -> None:
 
     print("\n[Encoder Check] Capturing M1 encoder change during low-speed movement ...")
     before = rc.ReadEncM1(addr)
+    log_runtime_event(f"Encoder baseline: {before}")
 
     # Command a controlled low-speed movement before the full test sequence.
+    log_runtime_event("Applying +10% duty for encoder check")
     set_duty_safe(rc, addr, duty_percent_to_raw(10), label="Encoder check")
     time.sleep(2)
+    print("  [Encoder Check] 2.0s elapsed; checking status and stopping motor")
+    check_and_report_status(rc, addr, context="encoder check")
     set_duty_safe(rc, addr, 0, label="Encoder check stop")
 
     after = rc.ReadEncM1(addr)
 
     print(f"M1 Encoder before: {before}")
     print(f"M1 Encoder after : {after}")
+    log_runtime_event(f"Encoder delta: {after - before}")
 
     # ── Stage 1: Forward Ramp (0% → +50%) ──────────────────────────────────
+    log_runtime_event("Launching Stage 1: Forward Ramp-Up")
     ramp_duty_verbose(rc, addr, start_pct=0, end_pct=50, duration_s=2.0, stage_name="Stage 1: Forward Ramp-Up")
     check_and_report_status(rc, addr, context="post forward ramp")
 
     # ── Stage 2: Forward Hold (+50% for 2s) ────────────────────────────────
     print("\n[Stage 2: Forward Hold] Holding M1 at +50% for 2.0s ...")
+    log_runtime_event("Applying +50% duty hold")
     set_duty_safe(rc, addr, DUTY_50_PCT, label="Hold +50%")
     for sec in range(1, 3):
         time.sleep(1.0)
+        log_runtime_event(f"  [Stage 2] hold second {sec}/2: checking status")
         check_and_report_status(rc, addr, context=f"forward hold second {sec}")
 
     # ── Stage 3: Forward Ramp-Down (+50% → 0%) ──────────────────────────────
+    log_runtime_event("Launching Stage 3: Forward Ramp-Down")
     ramp_duty_verbose(rc, addr, start_pct=50, end_pct=0, duration_s=1.0, stage_name="Stage 3: Forward Ramp-Down")
     check_and_report_status(rc, addr, context="post forward ramp-down")
     print("  → Pausing 1.0s in neutral ...")
     time.sleep(1.0)
 
     # ── Stage 4: Reverse Ramp (0% → -50%) ──────────────────────────────────
+    log_runtime_event("Launching Stage 4: Reverse Ramp-Up")
     ramp_duty_verbose(rc, addr, start_pct=0, end_pct=-50, duration_s=2.0, stage_name="Stage 4: Reverse Ramp-Up")
     check_and_report_status(rc, addr, context="post reverse ramp")
 
     # ── Stage 5: Reverse Hold (-50% for 2s) ────────────────────────────────
     print("\n[Stage 5: Reverse Hold] Holding M1 at -50% for 2.0s ...")
+    log_runtime_event("Applying -50% duty hold")
     set_duty_safe(rc, addr, -DUTY_50_PCT, label="Hold -50%")
     for sec in range(1, 3):
         time.sleep(1.0)
+        log_runtime_event(f"  [Stage 5] hold second {sec}/2: checking status")
         check_and_report_status(rc, addr, context=f"reverse hold second {sec}")
 
     # ── Stage 6: Reverse Ramp-Down (-50% → 0%) ─────────────────────────────
+    log_runtime_event("Launching Stage 6: Reverse Ramp-Down")
     ramp_duty_verbose(rc, addr, start_pct=-50, end_pct=0, duration_s=1.0, stage_name="Stage 6: Reverse Ramp-Down")
     check_and_report_status(rc, addr, context="test completion")
 
