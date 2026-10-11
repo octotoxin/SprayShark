@@ -234,6 +234,12 @@ travel timeout if current-based limit detection does not occur within
 `/dev/ttyACM0`, supports `--start-position extended|retracted`,
 displays the reported average, and waits up to 120 seconds for
 completion. It uses pyserial, consistent with existing Pi scripts.
+To run the Pi script from its directory with the actuator starting
+retracted, use:
+
+```bash
+python3 v3_actuator_test_for_rpi.py --start-position retracted
+```
 
 Arduino CLI requires the sketch's main `.ino` filename to match its
 sketch directory. These required filenames do not match the existing

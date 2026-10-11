@@ -33,6 +33,7 @@ static unsigned long lastCurrentSampleAt = 0;
 static uint32_t currentCalibrationSum = 0;
 static unsigned int currentCalibrationSamples = 0;
 static int currentBaseline = 0;
+static int currentPeakReading = 0;
 static bool currentBaselineReady = false;
 static unsigned int overCurrentSamples = 0;
 static unsigned int completedTravels = 0;
@@ -79,6 +80,7 @@ static void startTest(bool startRetracted) {
   currentCalibrationSum = 0;
   currentCalibrationSamples = 0;
   currentBaseline = 0;
+  currentPeakReading = 0;
   currentBaselineReady = false;
   overCurrentSamples = 0;
   setActuatorDirection(movingExtend);
@@ -135,6 +137,7 @@ static void beginTravel(bool extend, unsigned long now) {
   currentCalibrationSum = 0;
   currentCalibrationSamples = 0;
   currentBaseline = 0;
+  currentPeakReading = 0;
   currentBaselineReady = false;
   overCurrentSamples = 0;
   testPhase = MOVING_TO_LIMIT;
@@ -144,8 +147,19 @@ static void beginTravel(bool extend, unsigned long now) {
 static void failTravelTimeout() {
   stopActuator();
   testPhase = IDLE;
-  reportStatus(movingExtend ? "ERROR,TRAVEL_TIMEOUT,EXTEND"
-                            : "ERROR,TRAVEL_TIMEOUT,RETRACT");
+
+  const int requiredRise =
+      currentBaseline * CURRENT_RISE_PERCENT / 100 > MIN_CURRENT_RISE_ADC
+          ? currentBaseline * CURRENT_RISE_PERCENT / 100
+          : MIN_CURRENT_RISE_ADC;
+  const int threshold =
+      currentBaselineReady ? currentBaseline + requiredRise : -1;
+  char message[96];
+  snprintf(message, sizeof(message),
+           "ERROR,TRAVEL_TIMEOUT,%s,BASELINE=%d,PEAK=%d,THRESHOLD=%d",
+           movingExtend ? "EXTEND" : "RETRACT", currentBaseline,
+           currentPeakReading, threshold);
+  reportStatus(message);
 }
 
 static void completeTravel(unsigned long now) {
@@ -201,6 +215,9 @@ static void updateTest() {
 
   const int sensePin = movingExtend ? R_IS_PIN : L_IS_PIN;
   const int currentReading = analogRead(sensePin);
+  if (currentReading > currentPeakReading) {
+    currentPeakReading = currentReading;
+  }
 
   if (travelElapsed >= CURRENT_STARTUP_BLANK_MS &&
       travelElapsed < CURRENT_CALIBRATION_END_MS) {
