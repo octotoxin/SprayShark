@@ -1,6 +1,6 @@
 # SprayBot / SprayShark Context: Electronics and Programming
 
-*Last updated: 2026-10-11*
+*Last updated: 2026-10-14*
 
 This document captures the electronics and software details discussed
 for the SprayBot/SprayShark robotic lawn sprayer. Treat confirmed
@@ -20,7 +20,8 @@ This repository is organized around an ESP32-controlled robotic lawn-sprayer pro
 -   `main_projects/sprayshark_v2_singlefile/` — a single-file variant of the same project for comparison or legacy use.
 -   `test_files/v3_actuator_test/` — the active current-sensed actuator travel-time test workspace. Contains `v3_actuator_test_for_esp32.ino` and `v3_actuator_test_for_rpi.py`.
 -   `test_files/v3_motor_test/` — wiring documentation and motor test firmware. Relevant files include `PINOUT_AND_WIRING.md` and the `rpi_motor_test_esp32.ino` sketch.
--   `test_files/actuator/` and `test_files/actuator_calibration/` — actuator-focused test sketches and calibration experiments.
+-   `tests/actuator/esp32/` — current standalone actuator test sketches, including `auto_calibrate/auto_calibrate.ino`, `half_extend/half_extend.ino`, and `test_current_pin/test_current_pin.ino`.
+-   `tests/actuator/rpi/` — Raspberry Pi actuator test scripts.
 -   `test_files/ble_sniffer/` — BLE traffic sniffing / packet debugging experiments.
 -   `test_files/v2_motor_ramping_demo/` — motor ramping demo code.
 -   `other_info/dabble_codes.md` — Dabble button/packet mapping used by the Bluetooth packet parser.
@@ -264,6 +265,33 @@ ratings must still be verified against the installed hardware before
 operation. The standalone serial protocol is specific to this test
 sketch; it is not the main project's BLE/Dabble control protocol or the
 RoboClaw packet-serial protocol.
+
+### Current actuator calibration experiment (2026-10-14)
+
+The current ESP32-S3 calibration sketch is
+`tests/actuator/esp32/auto_calibrate/auto_calibrate.ino`. It uses the
+actuator-test pin map: RPWM/extend GPIO 2, LPWM/retract GPIO 3, enables
+GPIO 4/5, and current-sense inputs R_IS GPIO 6 and L_IS GPIO 7. This
+test uses the BTS7960 current-sense outputs as limit indicators; it is
+separate from the earlier current-rise test described above.
+
+At 115200 baud, newline-terminated `START` begins a non-blocking
+sequence: retract until L_IS reads exactly zero continuously for at
+least 10 ms, then perform three extend/retract traversals. R_IS > L_IS
+confirms extension and L_IS > R_IS confirms retraction before a zero
+reading is accepted as that leg's endpoint. Any nonzero sample resets
+the 10 ms confirmation interval. Each leg's duration is measured from
+the first zero sample in its confirmed interval. The sketch reports
+each leg's duration and the average extension and retraction durations
+to both `Serial` and `Serial0`. `STOP` stops the actuator and aborts the
+sequence. ESP32-S3 compilation was verified; hardware behavior was not
+tested.
+
+The related `tests/actuator/esp32/half_extend/half_extend.ino` sketch
+is a fixed-duration test: it retracts for 4 seconds, pauses for 2
+seconds, extends for 1.61 seconds, then pauses for 2 seconds. A
+newline-terminated `START` begins the sequence; it reports status on
+both serial ports at 115200 baud.
 
 ## 7. Other electronics discussed
 
