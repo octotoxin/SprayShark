@@ -16,11 +16,13 @@ enum CalibrationPhase {
   IDLE,
   INITIAL_RETRACT,
   EXTENDING,
-  RETRACTING
+  RETRACTING,
+  POSITIONING_MIDPOINT
 };
 
 static CalibrationPhase phase = IDLE;
 static unsigned long phaseStartedAt = 0;
+static unsigned long midpointDurationMs = 0;
 static unsigned long limitZeroStartedAt = 0;
 static bool limitZeroTiming = false;
 static bool directionObserved = false;
@@ -160,20 +162,16 @@ static void pollCommandPort(
   }
 }
 
-static void reportCalibrationResults() {
-  const unsigned long averageExtendMs =
-      static_cast<unsigned long>(extendDurationTotal / CALIBRATION_TRIALS);
-  const unsigned long averageRetractMs =
-      static_cast<unsigned long>(retractDurationTotal / CALIBRATION_TRIALS);
+static unsigned long reportCalibrationResults() {
+  const unsigned long averageTravelMs = static_cast<unsigned long>(
+      (extendDurationTotal + retractDurationTotal) /
+      (CALIBRATION_TRIALS * 2));
 
-  Serial.print("AVERAGE_EXTEND_MS:");
-  Serial.println(averageExtendMs);
-  Serial.print("AVERAGE_RETRACT_MS:");
-  Serial.println(averageRetractMs);
-  Serial0.print("AVERAGE_EXTEND_MS:");
-  Serial0.println(averageExtendMs);
-  Serial0.print("AVERAGE_RETRACT_MS:");
-  Serial0.println(averageRetractMs);
+  Serial.print("AVERAGE_TRAVEL_MS:");
+  Serial.println(averageTravelMs);
+  Serial0.print("AVERAGE_TRAVEL_MS:");
+  Serial0.println(averageTravelMs);
+  return averageTravelMs;
 }
 
 static void updateCalibration(unsigned long now) {
@@ -215,13 +213,28 @@ static void updateCalibration(unsigned long now) {
 
         if (completedTrials == CALIBRATION_TRIALS) {
           stopActuator();
-          phase = IDLE;
           resetLimitZeroTimer();
-          reportCalibrationResults();
-          reportStatus("CALIBRATION_COMPLETE");
+          const unsigned long averageTravelMs = reportCalibrationResults();
+          midpointDurationMs = averageTravelMs / 2;
+          if (midpointDurationMs == 0) {
+            phase = IDLE;
+            reportStatus("CALIBRATION_COMPLETE");
+          } else {
+            setActuatorDirection(true);
+            phase = POSITIONING_MIDPOINT;
+            phaseStartedAt = now;
+          }
         } else {
           beginExtension();
         }
+      }
+      break;
+
+    case POSITIONING_MIDPOINT:
+      if (now - phaseStartedAt >= midpointDurationMs) {
+        stopActuator();
+        phase = IDLE;
+        reportStatus("CALIBRATION_COMPLETE");
       }
       break;
 

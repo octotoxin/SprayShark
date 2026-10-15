@@ -282,10 +282,11 @@ confirms extension and L_IS > R_IS confirms retraction before a zero
 reading is accepted as that leg's endpoint. Any nonzero sample resets
 the 10 ms confirmation interval. Each leg's duration is measured from
 the first zero sample in its confirmed interval. The sketch reports
-each leg's duration and the average extension and retraction durations
-to both `Serial` and `Serial0`. `STOP` stops the actuator and aborts the
-sequence. ESP32-S3 compilation was verified; hardware behavior was not
-tested.
+each leg's duration and the average of all six travel durations to both
+`Serial` and `Serial0`, then extends for half of that average duration
+to finish at the estimated midpoint. `STOP` stops the actuator and
+aborts the sequence. ESP32-S3 compilation was verified; hardware
+behavior was not tested.
 
 The related `tests/actuator/esp32/half_extend/half_extend.ino` sketch
 is a fixed-duration test: it retracts for 4 seconds, pauses for 2
