@@ -122,9 +122,9 @@ static void stopCalibration() {
 }
 
 static void processCommand(const char *command) {
-  if (strcmp(command, "START") == 0) {
+  if (strcmp(command, "s") == 0) {
     startCalibration();
-  } else if (strcmp(command, "STOP") == 0) {
+  } else if (strcmp(command, "x") == 0) {
     stopCalibration();
   } else {
     reportStatus("UNKNOWN_COMMAND");
