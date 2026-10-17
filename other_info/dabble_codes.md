@@ -20,3 +20,16 @@
 
 ## Packet Structure
 `0xFF 0x01 0x01 0x01 0x02 [ACTION_BTNS] [DPAD_BTNS] ...`
+
+For the documented Gamepad packet, the five-byte prefix is
+`FF 01 01 01 02`; the action byte is at offset 5 and the directional-button
+byte is at offset 6 (zero-based). Bluetooth reads are a byte stream: a read may
+contain a partial packet or multiple packets, so use the prefix to synchronize
+and wait until at least seven bytes are available before reading the buttons.
+The bytes after the directional-button byte are not specified here.
+
+The Raspberry Pi hosts an RFCOMM Serial Port Profile service on channel 1 for
+the Dabble phone to connect to. Pair the phone with the Pi and make the Pi
+discoverable before starting the application. The ESP32 does not run Dabble;
+it receives only the newline-terminated `ACTUATOR LEFT`, `ACTUATOR RIGHT`, and
+`ACTUATOR STOP` commands over USB serial.
