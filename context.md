@@ -1,6 +1,6 @@
 # SprayBot / SprayShark Context: Electronics and Programming
 
-*Last updated: 2026-10-14*
+*Last updated: 2026-10-17*
 
 This document captures the electronics and software details discussed
 for the SprayBot/SprayShark robotic lawn sprayer. Treat confirmed
@@ -9,41 +9,23 @@ as items to inspect before changing hardware or code.
 
 ## 0. Repository map and agent quick-reference
 
-This repository is organized around an ESP32-controlled robotic lawn-sprayer prototype and several test sketches. The most relevant folders for new work are:
+The repository has a `firmware/` tree for the Raspberry Pi and ESP32 application, plus separate hardware-test programs:
 
--   `main_projects/sprayshark_v2_multifile/` — the main multi-file Arduino project for the robot. It contains:
-    -   `config.h` — shared pin assignments, motion/actuator constants, BLE UUIDs, and global state.
-    -   `sprayshark_v2_multifile.ino` — main sketch that initializes BLE, motor control, pump logic, and arming sequence.
-    -   `actuator.ino` — actuator driver, limit switches, and target-position logic.
-    -   `motors.ino` — ESC ramping, emergency stop, and arming sequence.
-    -   `bluetooth.ino` — Dabble packet parsing and robot command logic.
--   `main_projects/sprayshark_v2_singlefile/` — a single-file variant of the same project for comparison or legacy use.
--   `test_files/v3_actuator_test/` — the active current-sensed actuator travel-time test workspace. Contains `v3_actuator_test_for_esp32.ino` and `v3_actuator_test_for_rpi.py`.
--   `test_files/v3_motor_test/` — wiring documentation and motor test firmware. Relevant files include `PINOUT_AND_WIRING.md` and the `rpi_motor_test_esp32.ino` sketch.
--   `tests/actuator/esp32/` — current standalone actuator test sketches, including `auto_calibrate/auto_calibrate.ino`, `half_extend/half_extend.ino`, and `test_current_pin/test_current_pin.ino`.
--   `tests/actuator/rpi/` — Raspberry Pi actuator test scripts.
--   `test_files/ble_sniffer/` — BLE traffic sniffing / packet debugging experiments.
--   `test_files/v2_motor_ramping_demo/` — motor ramping demo code.
--   `other_info/dabble_codes.md` — Dabble button/packet mapping used by the Bluetooth packet parser.
+-   `firmware/rpi/` — Raspberry Pi entry point, robot controller, and component modules.
+-   `firmware/esp32/` — ESP32 sketch and communication, encoder, movement, safety, and spraying modules.
+-   `tests/actuator/` — standalone actuator test sketches and Pi scripts.
+-   `tests/motor/` — RoboClaw wiring notes, Pi diagnostics, and an ESP32 serial forwarder.
+-   `tests/bluetooth/rpi/` — Dabble code-finder utility.
+-   `other_info/dabble_codes.md` — recorded Dabble button/packet mapping.
+-   `final_wiring.md` — wiring reference; verify it against the hardware as currently assembled.
 
-Important repo-specific facts discovered from the code:
+**Firmware rebuild status (2026-10-17):** the Raspberry Pi actuator-control path and the ESP32 serial-command/movement path have been implemented in the files described below. Other firmware modules and declaration headers may still be empty or incomplete. Do not assume unrelated historical architecture, protocols, pin assignments, or behavior are present or working just because they are described elsewhere in this document. The files under `tests/` are separate test programs and are not the application firmware.
 
--   The active robot firmware uses a BLE/Dabble control model rather than a plain serial command protocol in the main project.
--   The main multi-file project sets `Serial.begin(115200)` and uses `BLE.begin()` with `SprayShark` as the device name.
--   The most relevant actuator pin map in `config.h` is:
-    -   `RPWM_PIN = 2` (extend)
-    -   `LPWM_PIN = 3` (retract)
-    -   `R_EN_PIN = 4`
-    -   `L_EN_PIN = 5`
-    -   `R_IS_PIN = 12` and `L_IS_PIN = 11` in the main-project source;
-        the current actuator-test wiring instead uses `R_IS_PIN = 6`
-        and `L_IS_PIN = 7`.
-    -   `LIMIT_SWITCH_RIGHT_PIN = A0`
-    -   `LIMIT_SWITCH_LEFT_PIN = A1`
--   The main project also uses ESC pins `leftEscPin = 9` and `rightEscPin = 10` and a relay pin at `6` for the pump.
--   The `Dabble` packet format includes action buttons and d-pad buttons, with `0xFF 0x01 0x01 0x01 0x02 [ACTION_BTNS] [DPAD_BTNS] ...` as the packet frame described in `other_info/dabble_codes.md`.
--   The `main_projects/sprayshark_v2_multifile` code relies on `isOverturnLimitHit()` and a symmetric position model. This means actuator motion is governed by time and virtual position, not just raw duty-cycle commands.
--   The `v3_actuator_test` workspace measures limit-to-limit travel using BTS7960 current-sense outputs; it does not use the main project's limit switches or position model.
+The following are historical project notes, not facts verified by the current firmware source:
+
+-   BLE/Dabble control, USB serial communication, and RoboClaw packet serial have all been discussed or used in earlier experiments. Confirm which interface is intended for each new step rather than combining protocols by assumption.
+-   Historical pin assignments and Dabble framing are recorded below and in `other_info/dabble_codes.md`; verify them against the actual wiring and the specific test before use.
+-   Standalone actuator tests may use different pins and control logic from the eventual application firmware. Do not transfer a test's pin map into the application without checking the wiring.
 
 ## 1. Project purpose and architecture
 
@@ -65,19 +47,29 @@ The general control architecture discussed is:
     reference/ground where required by the chosen driver and wiring
     design.
 
-Inspect the current repository and wiring before assuming a particular
-pin, relay, H-bridge, or protocol. Existing working code should be
-reused rather than replaced without a reason.
+The application firmware is being rebuilt incrementally. Implement only
+the requested step, inspect the repository and wiring before choosing
+pins, drivers, or protocols, and verify each step before building on it.
+Hardware and architecture notes elsewhere in this document are historical
+references until confirmed for the current build.
 
 ## 2. Raspberry Pi
 
 -   Board: **Raspberry Pi 5, 8 GB RAM**.
 -   Raspberry Pi is used for high-level control and Python code.
--   The current Pi-to-ESP32 USB serial device previously observed is
-    `/dev/ttyACM0`.
--   The Pi-to-ESP32 serial baud rate previously used is **115200**.
--   These serial settings should be checked against the currently
-    running code before relying on them.
+-   `firmware/rpi/main.py` runs the actuator controller when invoked
+    directly on the Pi (for example, `python3 firmware/rpi/main.py`).
+-   `firmware/rpi/robot_controller.py` reads physical USB keyboard
+    key-down/key-up events through `evdev`; `A` retracts, `D` extends,
+    releasing either direction stops, and `Q` stops and exits. Holding
+    both A and D stops as a safety behavior.
+-   The controller sends `ACTUATOR_LEFT`, `ACTUATOR_RIGHT`, and
+    `ACTUATOR_STOP` through `firmware/rpi/components/esp32_interface.py`.
+-   `firmware/rpi/components/esp32_interface.py` opens `/dev/ttyACM0`
+    at 115200 baud and writes each command followed by a newline.
+-   On the Pi, install the runtime dependencies with
+    `sudo apt install python3-evdev python3-serial`. The evdev device
+    permissions must allow the running user to read the keyboard.
 -   Raspberry Pi 5 accessories discussed include an active cooler, an
     NVMe M.2 HAT, a 128 GB NVMe SSD, and a Pi camera.
 -   Camera note: a Raspberry Pi NoIR camera was previously not detected
@@ -89,6 +81,16 @@ reused rather than replaced without a reason.
 
 -   Board/module discussed: **ESP32-S3-WROOM-1 N16R8**, used with a
     Freenove board/breakout.
+-   `firmware/esp32/esp32.ino` initializes the actuator hardware, starts
+    USB serial at 115200 baud, and processes serial input in the loop.
+-   `firmware/esp32/communication.cpp` parses newline-terminated
+    `ACTUATOR_LEFT`, `ACTUATOR_RIGHT`, and `ACTUATOR_STOP` commands and
+    dispatches them to the matching actuator movement functions.
+-   `firmware/esp32/movement.cpp` maps left to retract and right to
+    extend; STOP disables both actuator directions.
+-   The ESP32 sketch compiled for the generic ESP32 target with Arduino
+    CLI. Hardware flashing and physical actuator behavior have not been
+    verified.
 -   Configuration discussed: **16 MB flash and 8 MB PSRAM**, 40 MHz
     crystal.
 -   A Freenove breakout/protoboard was selected as a practical way to
@@ -120,13 +122,41 @@ Recorded ESP-IDF environment details from that experiment:
 -   The ESP32-C6 Matter fan project is a separate development effort; do
     not assume its environment or code applies to SprayBot.
 
-## 4. Existing serial communication: Raspberry Pi ↔ ESP32-S3
+## 4. Serial communication: Raspberry Pi ↔ ESP32-S3
 
-The following arrangement was reported as working:
+### Current actuator command path (2026-10-17)
 
--   Raspberry Pi to ESP32-S3 over USB serial.
--   Pi serial device: `/dev/ttyACM0`.
--   Pi-to-ESP32 baud rate: **115200**.
+-   Connection: Raspberry Pi 5 to ESP32 over USB serial at
+    `/dev/ttyACM0`, **115200 baud**.
+-   Framing: ASCII command text terminated by newline (`\n`). The
+      ESP32 also accepts CRLF by removing a trailing carriage return.
+-   Supported commands: `ACTUATOR_LEFT`, `ACTUATOR_RIGHT`, and
+      `ACTUATOR_STOP`. The underscore spelling is intentional and must
+      match exactly on both sides.
+-   `ACTUATOR_LEFT` calls `actuatorLeft()` (retract); `ACTUATOR_RIGHT`
+      calls `actuatorRight()` (extend); `ACTUATOR_STOP` calls
+      `actuatorStop()`.
+-   The ESP32 does not apply a movement heartbeat/timeout. The Pi emits
+      a direction command on key-down and an explicit STOP on key-up, so
+      timing out an otherwise-held key would stop motion prematurely.
+-   Unknown or oversized command lines cause the ESP32 to stop the
+      actuator as a fail-safe. Startup also initializes the actuator
+      stopped.
+-   The Pi handles the `Q` exit path by stopping the actuator before
+      shutdown.
+-   Rationale: use evdev's real key-down/key-up events for momentary
+      actuator control, rather than relying on repeated polling of a
+      gamepad/Bluetooth state; underscore-separated tokens make the wire
+      commands explicit and consistent across Pi and ESP32.
+-   Arduino CLI compilation succeeded for `esp32:esp32:esp32`; this
+      verifies compilation only, not USB serial behavior or actuator
+      operation on hardware.
+
+### Historical Pi ↔ RoboClaw serial arrangement
+
+The following settings and behavior are from an earlier version and are
+not implemented by the current actuator command path:
+
 -   ESP32 to RoboClaw motor-controller baud rate: **38400**.
 -   RoboClaw address: **0x80**.
 -   Commands from the Pi passed through the ESP32 to RoboClaw, and motor
@@ -136,17 +166,14 @@ The following arrangement was reported as working:
 -   A Python diagnostic script had been used and was referred to as
     **SPRAYSHARK v3**.
 
-Before modifying the serial protocol:
+When adding or changing serial protocols:
 
-1.  Inspect the current Python serial implementation and ESP32 command
-    parser.
-2.  Preserve existing framing, delimiters, command identifiers,
-    acknowledgments, and telemetry format where possible.
-3.  Avoid having multiple scripts or processes open the same serial port
+1.  Keep the Pi and ESP32 command names, framing, and baud rate in sync.
+2.  Avoid having multiple scripts or processes open the same serial port
     simultaneously.
-4.  Distinguish the Pi↔ESP32 baud rate (115200) from the ESP32↔RoboClaw
-    baud rate (38400).
-5.  Do not assume that a working command path proves the
+3.  Treat the ESP32↔RoboClaw baud rate (38400) separately from the
+    Pi↔ESP32 baud rate (115200).
+4.  Do not assume that a working command path proves the
     feedback/telemetry path is correct.
 
 ## 5. Drive motors and RoboClaw
@@ -155,7 +182,8 @@ Before modifying the serial protocol:
 -   RoboClaw address: **0x80**.
 -   ESP32-to-RoboClaw serial baud rate: **38400**.
 -   Drive motor control was reported working through the chain Pi →
-    ESP32-S3 → RoboClaw.
+    ESP32-S3 → RoboClaw in an earlier implementation; that code has
+    since been cleared.
 -   Encoder/closed-loop motor control was part of the design.
 -   The reported outstanding issue was missing motor telemetry/feedback.
 
@@ -165,12 +193,14 @@ whether the transmit/receive wiring and ground reference support
 bidirectional communication. Do not change motor-control settings
 blindly while the drive system is mechanically loaded.
 
-## 6. Linear actuator test requested on 2026-10-11
+## 6. Historical linear actuator test request (2026-10-11)
 
-The active test measures actuator travel time between physical endpoints
-by detecting the current increase when the actuator reaches a limit.
+This section records requirements and implementation notes from an
+earlier standalone test request. The described `v3_actuator_test` files
+are not present in the current repository; treat these details as
+historical reference, not as an available test or application feature.
 
-Exactly two files are requested:
+The original request was for exactly two files:
 
 -   `v3_actuator_test_for_esp32.ino`
 -   `v3_actuator_test_for_rpi.py`
@@ -182,9 +212,10 @@ assumes it starts retracted.
 
 ### Raspberry Pi script requirements
 
--   Use the existing serial connection and protocol if possible.
--   Current known settings are `/dev/ttyACM0` at 115200 baud, but verify
-    them against the current implementation.
+-   Define a serial connection and protocol for the standalone test;
+    there is no application protocol to reuse.
+-   The historical settings were `/dev/ttyACM0` at 115200 baud; verify
+    the device and baud rate for the test setup.
 -   Send one start command.
 -   Display basic status messages from the ESP32.
 -   Handle connection errors and communication timeouts.
@@ -194,34 +225,35 @@ assumes it starts retracted.
 
 ### ESP32 firmware requirements
 
--   Use the existing actuator driver and GPIO configuration after
-    inspecting the project.
+-   Select the actuator driver and GPIO configuration only after
+    inspecting the hardware and wiring.
 -   Start the complete sequence after receiving one valid start command.
 -   Keep serial communication responsive during the sequence; prefer a
     non-blocking state machine over a long blocking delay.
 -   Prevent a second test from starting while the first is active.
 -   Stop actuator outputs at startup and after the sequence.
 -   Send basic start/completion status messages.
--   Detect endpoints from R_IS/L_IS current sensing; do not use the
-    main project's limit switches or virtual-position logic in this
+-   Detect endpoints from R_IS/L_IS current sensing; do not assume
+    application limit switches or virtual-position logic apply to this
     standalone test.
 -   Do not modify existing project files; create only the two named
     files.
 -   Provide build/flash instructions and the exact command to run the Pi
     script.
 
-### Implementation notes
+### Historical implementation notes (not present in the current tree)
 
-The two requested test files are in `test_files/v3_actuator_test/`. The
-firmware uses BTS7960 direction pins GPIO 2 (extend) and GPIO 3
-(retract), enable pins GPIO 4/5, and current-sense pins GPIO 6 (R_IS,
-extend) and GPIO 7 (L_IS, retract). These current-sense assignments
-match the actuator-test wiring and differ from the R_IS/L_IS assignments
-in the main project's `config.h`. In particular, GPIO 6 is the pump
-relay in the main project, so these configurations must not be treated
-as interchangeable. The test sketch stops both direction outputs at
-startup, detects a sustained current rise at each travel limit, and
-reverses after a short dead time.
+The two requested test files were intended for
+`test_files/v3_actuator_test/`; that directory is absent from the current
+repository. The former proposed firmware used BTS7960 direction pins
+GPIO 2 (extend) and GPIO 3 (retract), enable pins GPIO 4/5, and
+current-sense pins GPIO 6 (R_IS, extend) and GPIO 7 (L_IS, retract).
+These assignments were recorded for the standalone test and differ from
+an older application pin map. Historical notes assigned GPIO 6 to the
+pump relay in that application map, so the configurations must not be
+treated as interchangeable. The test sketch stopped both direction
+outputs at startup, detected a sustained current rise at each travel
+limit, and reversed after a short dead time.
 
 The standalone test protocol accepts newline-terminated `START` or
 `START_RETRACTED` over USB serial at 115200 baud. `START` assumes the
@@ -250,17 +282,17 @@ Arduino sketch directory named `v3_actuator_test_for_esp32` containing
 `esp32:esp32:esp32s3` that way; hardware flashing and actuator operation
 were not tested.
 
-### Important interpretation
+### Safety notes for actuator tests
 
-The test identifies endpoints from a sustained current increase, which
-is intended to indicate that the actuator has reached a mechanical
-limit. The configured current-rise threshold should be verified against
-the installed driver and actuator before use. The test should be
-supervised, with the linkage clear and the robot safely supported; stop
-it if the mechanism binds or the driver overheats.
+The historical test identified endpoints from a sustained current
+increase, intended to indicate that the actuator has reached a
+mechanical limit. Any current-rise threshold must be verified against
+the installed driver and actuator before use. Supervise actuator tests,
+keep the linkage clear, and stop if the mechanism binds or the driver
+overheats.
 
-The test sketch's pin assignments and BTS7960 driver name reflect the
-current actuator-test wiring, but the actuator's voltage/current
+The standalone test's pin assignments and BTS7960 driver name reflect
+the wiring recorded for that test, but the actuator's voltage/current
 ratings must still be verified against the installed hardware before
 operation. The standalone serial protocol is specific to this test
 sketch; it is not the main project's BLE/Dabble control protocol or the
@@ -359,7 +391,8 @@ When working on SprayBot electronics/programming:
 1.  Inspect the actual repository and existing code before choosing GPIO
     pins, command formats, drivers, or libraries.
 2.  Clearly distinguish verified facts from assumptions.
-3.  Preserve working Pi↔ESP32↔RoboClaw communication.
+3.  Rebuild and verify Pi↔ESP32↔RoboClaw communication step by step;
+    do not assume the historical connection still works.
 4.  Make the smallest changes needed for the requested task.
 5.  Do not refactor unrelated code or edit existing files when the task
     explicitly requests new files only.

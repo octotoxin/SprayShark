@@ -1,62 +1,51 @@
-"""Run the Raspberry Pi Bluetooth-to-ESP32 actuator controller."""
+"""Run the Raspberry Pi USB-keyboard-to-ESP32 actuator controller."""
 
 from __future__ import annotations
 
-import argparse
 import logging
-import os
 import signal
 import sys
 import threading
+from pathlib import Path
 
-from .components.bluetooth import BluetoothConnectionError, BluetoothReceiver
-from .components.esp32_interface import Esp32CommunicationError, Esp32Interface
-from .robot_controller import RobotController
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from firmware.rpi.components.esp32_interface import (
+        Esp32CommunicationError,
+        Esp32Interface,
+    )
+    from firmware.rpi.robot_controller import (
+        EvdevKeyboard,
+        KeyboardInputError,
+        RobotController,
+    )
+else:
+    from .components.esp32_interface import Esp32CommunicationError, Esp32Interface
+    from .robot_controller import EvdevKeyboard, KeyboardInputError, RobotController
 
 
 LOGGER = logging.getLogger("sprayshark")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--bluetooth-address",
-        default=os.environ.get("DABBLE_BLUETOOTH_ADDRESS"),
-        help="Optional Dabble phone MAC address filter (or DABBLE_BLUETOOTH_ADDRESS)",
-    )
-    parser.add_argument(
-        "--serial-port",
-        default="/dev/ttyACM0",
-        help="ESP32 USB serial device (default: /dev/ttyACM0)",
-    )
-    parser.add_argument("--rfcomm-channel", type=int, default=1)
-    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    shutdown = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
 
-    receiver = BluetoothReceiver(
-        channel=args.rfcomm_channel, expected_address=args.bluetooth_address
-    )
     esp32 = None
+    keyboard = None
     controller = None
     return_code = 0
-    shutdown = threading.Event()
-    signal.signal(signal.SIGTERM, lambda _signum, _frame: shutdown.set())
     try:
-        receiver.connect(shutdown.is_set)
-        if not shutdown.is_set():
-            esp32 = Esp32Interface(args.serial_port)
-            controller = RobotController(receiver, esp32)
-            controller.run(shutdown.is_set)
+        esp32 = Esp32Interface("/dev/ttyACM0")
+        keyboard = EvdevKeyboard()
+        controller = RobotController(keyboard, esp32)
+        controller.run(shutdown.is_set)
     except KeyboardInterrupt:
         LOGGER.info("Shutdown requested")
-    except BluetoothConnectionError as exc:
+    except (Esp32CommunicationError, KeyboardInputError) as exc:
         LOGGER.error("%s", exc)
         return_code = 1
-    except Esp32CommunicationError as exc:
-        LOGGER.error("%s", exc)
-        return_code = 1
-    else:
-        return_code = 0
     finally:
         if controller is not None:
             try:
@@ -64,11 +53,18 @@ def main() -> int:
             except Esp32CommunicationError as exc:
                 LOGGER.error("Could not send actuator STOP during shutdown: %s", exc)
                 return_code = 1
-        try:
-            receiver.close()
-        except BluetoothConnectionError as exc:
-            LOGGER.error("Could not close Bluetooth connection: %s", exc)
-            return_code = 1
+        elif esp32 is not None:
+            try:
+                esp32.send_command("ACTUATOR_STOP")
+            except Esp32CommunicationError as exc:
+                LOGGER.error("Could not send actuator STOP during shutdown: %s", exc)
+                return_code = 1
+        if keyboard is not None:
+            try:
+                keyboard.close()
+            except OSError as exc:
+                LOGGER.error("Could not close keyboard input: %s", exc)
+                return_code = 1
         if esp32 is not None:
             try:
                 esp32.close()

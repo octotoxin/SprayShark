@@ -4,19 +4,23 @@
 #include "communication.h"
 #include "movement.h"
 
+void actuatorLeft();
+void actuatorRight();
+void actuatorStop();
+
 namespace {
 constexpr size_t COMMAND_BUFFER_SIZE = 32;
-constexpr uint32_t COMMAND_TIMEOUT_MS = 750;
 char commandBuffer[COMMAND_BUFFER_SIZE];
 size_t commandLength = 0;
 bool commandOverflow = false;
-bool actuatorMoving = false;
-uint32_t lastCommandAt = 0;
+
+void stopForInvalidCommand() {
+  actuatorStop();
+}
 
 void dispatchCommand() {
   if (commandOverflow) {
-    actuatorStop();
-    actuatorMoving = false;
+    stopForInvalidCommand();
     commandLength = 0;
     commandOverflow = false;
     return;
@@ -27,23 +31,16 @@ void dispatchCommand() {
   }
   commandBuffer[commandLength] = '\0';
 
-  if (strcmp(commandBuffer, "ACTUATOR LEFT") == 0) {
+  if (strcmp(commandBuffer, "ACTUATOR_LEFT") == 0) {
     actuatorLeft();
-    actuatorMoving = true;
-  } else if (strcmp(commandBuffer, "ACTUATOR RIGHT") == 0) {
+  } else if (strcmp(commandBuffer, "ACTUATOR_RIGHT") == 0) {
     actuatorRight();
-    actuatorMoving = true;
-  } else if (strcmp(commandBuffer, "ACTUATOR STOP") == 0) {
+  } else if (strcmp(commandBuffer, "ACTUATOR_STOP") == 0) {
     actuatorStop();
-    actuatorMoving = false;
   } else {
-    actuatorStop();
-    actuatorMoving = false;
-    commandLength = 0;
-    return;
+    stopForInvalidCommand();
   }
 
-  lastCommandAt = millis();
   commandLength = 0;
 }
 
@@ -57,8 +54,7 @@ void receiveByte(char value) {
   }
   if (commandLength >= COMMAND_BUFFER_SIZE - 1) {
     commandOverflow = true;
-    actuatorStop();
-    actuatorMoving = false;
+    stopForInvalidCommand();
     return;
   }
   commandBuffer[commandLength++] = value;
@@ -68,19 +64,11 @@ void receiveByte(char value) {
 void communicationInit() {
   commandLength = 0;
   commandOverflow = false;
-  actuatorMoving = false;
-  lastCommandAt = millis();
   actuatorStop();
 }
 
 void communicationProcess() {
   while (Serial.available() > 0) {
     receiveByte(static_cast<char>(Serial.read()));
-  }
-
-  if (actuatorMoving &&
-      static_cast<uint32_t>(millis() - lastCommandAt) >= COMMAND_TIMEOUT_MS) {
-    actuatorStop();
-    actuatorMoving = false;
   }
 }

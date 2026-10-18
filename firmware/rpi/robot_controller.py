@@ -1,104 +1,155 @@
-"""Map Dabble gamepad states to safe actuator commands."""
+"""Read USB keyboard events and translate them into actuator commands."""
 
 from __future__ import annotations
 
 import logging
-import time
+import select
+from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .components.bluetooth import (
-    BluetoothConnectionError,
-    ButtonState,
-    InvalidDabblePacket,
-)
-from .components.esp32_interface import Esp32CommunicationError
-
-
 LOGGER = logging.getLogger(__name__)
-HEARTBEAT_INTERVAL_S = 0.2
-INPUT_TIMEOUT_S = 0.5
-BLUETOOTH_POLL_TIMEOUT_S = 0.1
+KEYBOARD_POLL_INTERVAL_S = 0.1
+ACTUATOR_STOP = "ACTUATOR_STOP"
+ACTUATOR_LEFT = "ACTUATOR_LEFT"
+ACTUATOR_RIGHT = "ACTUATOR_RIGHT"
 
 
-class BluetoothInput(Protocol):
-    def read_buttons(self, timeout: float = BLUETOOTH_POLL_TIMEOUT_S) -> ButtonState | None: ...
+class KeyboardInputError(ConnectionError):
+    """Raised when a usable evdev keyboard cannot be read."""
+
+
+@dataclass(frozen=True)
+class KeyEvent:
+    key: str
+    pressed: bool
+
+
+class KeyboardInput(Protocol):
+    def read_event(
+        self, timeout: float = KEYBOARD_POLL_INTERVAL_S
+    ) -> KeyEvent | None: ...
 
 
 class ActuatorOutput(Protocol):
     def send_command(self, command: str) -> None: ...
 
 
-def command_for_buttons(buttons: ButtonState) -> str:
-    if buttons.left == buttons.right:
-        return "ACTUATOR STOP"
-    return "ACTUATOR LEFT" if buttons.left else "ACTUATOR RIGHT"
+class EvdevKeyboard:
+    def __init__(self) -> None:
+        try:
+            import evdev
+        except ImportError as exc:
+            raise KeyboardInputError(
+                "evdev is required; install it on the Raspberry Pi with "
+                "'sudo apt install python3-evdev'"
+            ) from exc
+
+        self._evdev = evdev
+        self._devices = []
+        required_keys = {evdev.ecodes.KEY_A, evdev.ecodes.KEY_D, evdev.ecodes.KEY_Q}
+
+        try:
+            for path in evdev.list_devices():
+                device = evdev.InputDevice(path)
+                key_codes = set(device.capabilities().get(evdev.ecodes.EV_KEY, []))
+                if required_keys.issubset(key_codes):
+                    self._devices.append(device)
+                else:
+                    device.close()
+        except OSError as exc:
+            self.close()
+            raise KeyboardInputError(f"Could not open an evdev keyboard: {exc}") from exc
+
+        if not self._devices:
+            raise KeyboardInputError(
+                "No keyboard with A, D, and Q keys was found under /dev/input"
+            )
+
+        self._key_names = {
+            evdev.ecodes.KEY_A: "A",
+            evdev.ecodes.KEY_D: "D",
+            evdev.ecodes.KEY_Q: "Q",
+        }
+
+    def read_event(
+        self, timeout: float = KEYBOARD_POLL_INTERVAL_S
+    ) -> KeyEvent | None:
+        try:
+            ready, _, _ = select.select(self._devices, [], [], timeout)
+        except (OSError, ValueError) as exc:
+            raise KeyboardInputError(f"Could not read an evdev keyboard: {exc}") from exc
+
+        for device in ready:
+            while True:
+                event = device.read_one()
+                if event is None:
+                    break
+                if event.type != self._evdev.ecodes.EV_KEY or event.value not in (0, 1):
+                    continue
+                key = self._key_names.get(event.code)
+                if key is not None:
+                    return KeyEvent(key, event.value == 1)
+        return None
+
+    def close(self) -> None:
+        for device in self._devices:
+            device.close()
+        self._devices.clear()
 
 
 class RobotController:
-    def __init__(
-        self,
-        bluetooth: BluetoothInput,
-        esp32: ActuatorOutput,
-        *,
-        heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
-        input_timeout: float = INPUT_TIMEOUT_S,
-        clock=time.monotonic,
-    ) -> None:
-        if heartbeat_interval <= 0 or input_timeout <= 0:
-            raise ValueError("heartbeat_interval and input_timeout must be positive")
-        self.bluetooth = bluetooth
+    def __init__(self, keyboard: KeyboardInput, esp32: ActuatorOutput) -> None:
+        self.keyboard = keyboard
         self.esp32 = esp32
-        self.heartbeat_interval = heartbeat_interval
-        self.input_timeout = input_timeout
-        self._clock = clock
-        self._command = "ACTUATOR STOP"
-        self._last_command_at: float | None = None
-        self._last_input_at: float | None = None
+        self._command = ACTUATOR_STOP
+        self._pressed_keys: set[str] = set()
+        self._exit_requested = False
 
-    def _send_if_needed(self, command: str, now: float, force: bool = False) -> None:
-        heartbeat_due = (
-            self._last_command_at is None
-            or now - self._last_command_at >= self.heartbeat_interval
-        )
-        if force or command != self._command or heartbeat_due:
+    def _send_command(self, command: str, force: bool = False) -> None:
+        if force or command != self._command:
             self.esp32.send_command(command)
             self._command = command
-            self._last_command_at = now
+
+    def turnActuatorLeft(self) -> None:
+        self._send_command(ACTUATOR_LEFT)
+
+    def turnActuatorRight(self) -> None:
+        self._send_command(ACTUATOR_RIGHT)
+
+    def stopActuator(self, force: bool = False) -> None:
+        self._send_command(ACTUATOR_STOP, force=force)
 
     def start(self) -> None:
-        self._send_if_needed("ACTUATOR STOP", self._clock(), force=True)
+        self.stopActuator(force=True)
 
     def step(self) -> None:
-        now = self._clock()
-        try:
-            buttons = self.bluetooth.read_buttons(BLUETOOTH_POLL_TIMEOUT_S)
-        except InvalidDabblePacket:
-            LOGGER.warning("Invalid Dabble packet; stopping actuator")
-            self._last_input_at = None
-            self._send_if_needed("ACTUATOR STOP", self._clock())
+        event = self.keyboard.read_event(KEYBOARD_POLL_INTERVAL_S)
+        if event is None:
             return
-        except BluetoothConnectionError:
-            self._send_if_needed("ACTUATOR STOP", self._clock(), force=True)
-            raise
 
-        now = self._clock()
-        if buttons is not None:
-            self._last_input_at = now
-            command = command_for_buttons(buttons)
-        elif (
-            self._last_input_at is None
-            or now - self._last_input_at >= self.input_timeout
-        ):
-            command = "ACTUATOR STOP"
+        if event.key == "Q" and event.pressed:
+            self._exit_requested = True
+            self.stopActuator()
+            return
+
+        if event.key not in {"A", "D"}:
+            return
+        if event.pressed:
+            self._pressed_keys.add(event.key)
         else:
-            command = self._command
+            self._pressed_keys.discard(event.key)
 
-        self._send_if_needed(command, now)
+        if self._pressed_keys == {"A"}:
+            self.turnActuatorLeft()
+        elif self._pressed_keys == {"D"}:
+            self.turnActuatorRight()
+        else:
+            self.stopActuator()
 
-    def run(self, should_stop: Callable[[], bool]) -> None:
+    def run(self, should_stop: Callable[[], bool] | None = None) -> None:
         self.start()
-        while not should_stop():
+        while not self._exit_requested and not (should_stop and should_stop()):
             self.step()
 
     def stop(self) -> None:
-        self._send_if_needed("ACTUATOR STOP", self._clock(), force=True)
+        self.stopActuator(force=True)

@@ -7,6 +7,7 @@ constexpr uint8_t LPWM_PIN = 2;
 constexpr uint8_t R_EN_PIN = 4;
 constexpr uint8_t L_EN_PIN = 5;
 constexpr uint8_t DRIVE_PWM = 255;
+
 enum class Direction { STOPPED, LEFT, RIGHT };
 Direction currentDirection = Direction::STOPPED;
 }
