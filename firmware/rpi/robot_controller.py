@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import select
+import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
 LOGGER = logging.getLogger(__name__)
 KEYBOARD_POLL_INTERVAL_S = 0.1
+ACTUATOR_HEARTBEAT_INTERVAL_S = 0.2
 ACTUATOR_STOP = "ACTUATOR_STOP"
 ACTUATOR_LEFT = "ACTUATOR_LEFT"
 ACTUATOR_RIGHT = "ACTUATOR_RIGHT"
@@ -104,11 +106,21 @@ class RobotController:
         self._command = ACTUATOR_STOP
         self._pressed_keys: set[str] = set()
         self._exit_requested = False
+        self._last_command_sent_at = time.monotonic()
 
     def _send_command(self, command: str, force: bool = False) -> None:
         if force or command != self._command:
             self.esp32.send_command(command)
             self._command = command
+            self._last_command_sent_at = time.monotonic()
+
+    def _send_heartbeat_if_due(self) -> None:
+        if (
+            self._command in {ACTUATOR_LEFT, ACTUATOR_RIGHT}
+            and time.monotonic() - self._last_command_sent_at
+            >= ACTUATOR_HEARTBEAT_INTERVAL_S
+        ):
+            self._send_command(self._command, force=True)
 
     def turnActuatorLeft(self) -> None:
         self._send_command(ACTUATOR_LEFT)
@@ -125,6 +137,7 @@ class RobotController:
     def step(self) -> None:
         event = self.keyboard.read_event(KEYBOARD_POLL_INTERVAL_S)
         if event is None:
+            self._send_heartbeat_if_due()
             return
 
         if event.key == "Q" and event.pressed:
@@ -133,6 +146,7 @@ class RobotController:
             return
 
         if event.key not in {"A", "D"}:
+            self._send_heartbeat_if_due()
             return
         if event.pressed:
             self._pressed_keys.add(event.key)
@@ -145,6 +159,7 @@ class RobotController:
             self.turnActuatorRight()
         else:
             self.stopActuator()
+        self._send_heartbeat_if_due()
 
     def run(self, should_stop: Callable[[], bool] | None = None) -> None:
         self.start()
