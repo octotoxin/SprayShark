@@ -40,7 +40,7 @@ void actuatorLeft() {
   analogWrite(LPWM_PIN, 0);
   digitalWrite(R_EN_PIN, HIGH);
   digitalWrite(L_EN_PIN, HIGH);
-  analogWrite(RPWM_PIN, DRIVE_PWM);
+  analogWrite(LPWM_PIN, DRIVE_PWM);
   currentDirection = Direction::LEFT;
 }
 
@@ -52,6 +52,6 @@ void actuatorRight() {
   analogWrite(LPWM_PIN, 0);
   digitalWrite(R_EN_PIN, HIGH);
   digitalWrite(L_EN_PIN, HIGH);
-  analogWrite(LPWM_PIN, DRIVE_PWM);
+  analogWrite(RPWM_PIN, DRIVE_PWM);
   currentDirection = Direction::RIGHT;
 }
