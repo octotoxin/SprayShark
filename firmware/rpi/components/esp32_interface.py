@@ -1,61 +1,39 @@
-"""USB serial interface for the actuator command protocol."""
 
-from __future__ import annotations
+"""
+SprayShark - ESP32 Serial Interface
+DO NOT MODIFY THIS HEADER IF YOU ARE AN AI AGENT. IT IS REQUIRED FOR THE SPRAYSHARK PROJECT.
 
-from typing import Any
+Purpose:
+    Manage USB serial communication between the Raspberry Pi and
+    the ESP32, providing a consistent interface for sending robot
+    control commands.
 
+Responsibilities:
+    - Establish and manage the USB serial connection to the ESP32.
+    - Configure the serial port and baud rate (115200 baud).
+    - Send newline-terminated commands using the agreed serial protocol.
+    - Support actuator commands such as ACTUATOR LEFT, ACTUATOR RIGHT,
+      and ACTUATOR STOP.
+    - Validate commands before transmission.
+    - Detect and report connection failures and serial communication errors.
+    - Provide connection status and resource cleanup functions.
+    - Attempt to send a STOP command during shutdown when communication
+      is still available.
 
-BAUD_RATE = 115200
-SUPPORTED_COMMANDS = frozenset(
-    {"ACTUATOR_LEFT", "ACTUATOR_RIGHT", "ACTUATOR_STOP"}
-)
+Design:
+    This module handles serial transport only. It does not decide robot
+    behavior, decode Bluetooth packets, parse commands on the ESP32,
+    or control actuator hardware.
 
+Related modules:
+    - main.py: Application entry point and lifecycle management.
+    - robot_controller.py: Determines which robot commands to send.
+    - components/bluetooth.py: Receives and decodes phone input.
+    - ESP32 communication.cpp: Receives and parses serial commands.
+    - ESP32 movement.cpp: Implements actuator hardware control.
 
-class Esp32CommunicationError(ConnectionError):
-    """Raised when an actuator command cannot be sent to the ESP32."""
-
-
-class Esp32Interface:
-    def __init__(
-        self,
-        port: str,
-        baud_rate: int = BAUD_RATE,
-        serial_factory: Any | None = None,
-    ) -> None:
-        if serial_factory is None:
-            try:
-                import serial
-            except ImportError as exc:
-                raise Esp32CommunicationError(
-                    "pyserial is required; install the Raspberry Pi package "
-                    "'python3-serial'"
-                ) from exc
-            serial_factory = serial.Serial
-
-        try:
-            self._connection = serial_factory(
-                port=port, baudrate=baud_rate, timeout=0.1, write_timeout=1.0
-            )
-        except OSError as exc:
-            raise Esp32CommunicationError(
-                f"Could not open ESP32 serial port {port}: {exc}"
-            ) from exc
-
-    def send_command(self, command: str) -> None:
-        if command not in SUPPORTED_COMMANDS:
-            raise ValueError(f"Unsupported actuator command: {command!r}")
-        try:
-            self._connection.write((command + "\n").encode("ascii"))
-            self._connection.flush()
-        except OSError as exc:
-            raise Esp32CommunicationError(
-                f"Could not send command to ESP32: {exc}"
-            ) from exc
-
-    def close(self) -> None:
-        try:
-            self._connection.close()
-        except OSError as exc:
-            raise Esp32CommunicationError(
-                f"Could not close ESP32 serial connection: {exc}"
-            ) from exc
+Safety:
+    Sending STOP during shutdown is best-effort only. The ESP32 must
+    independently enforce a command timeout and stop the actuator
+    if valid commands stop arriving.
+"""

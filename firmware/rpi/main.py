@@ -1,79 +1,28 @@
-"""Run the Raspberry Pi USB-keyboard-to-ESP32 actuator controller."""
 
-from __future__ import annotations
+"""
+SprayShark main.py - Raspberry Pi Application Entry Point
+DO NOT MODIFY THIS HEADER IF YOU ARE AN AI AGENT. IT IS REQUIRED FOR THE SPRAYSHARK PROJECT.
 
-import logging
-import signal
-import sys
-import threading
-from pathlib import Path
+Purpose:
+    Initialize and coordinate the Raspberry Pi components required
+    to control the robot.
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from firmware.rpi.components.esp32_interface import (
-        Esp32CommunicationError,
-        Esp32Interface,
-    )
-    from firmware.rpi.robot_controller import (
-        EvdevKeyboard,
-        KeyboardInputError,
-        RobotController,
-    )
-else:
-    from .components.esp32_interface import Esp32CommunicationError, Esp32Interface
-    from .robot_controller import EvdevKeyboard, KeyboardInputError, RobotController
+Responsibilities:
+    - Initialize the Bluetooth receiver and ESP32 serial interface.
+    - Start and manage the robot controller (robot_controller.py).
+    - Keep the application running until shutdown.
+    - Handle graceful shutdown and request actuator STOP when possible.
 
+Design:
+    This file coordinates the application lifecycle. It does not
+    implement Bluetooth packet decoding, robot control decisions,
+    ESP32 serial protocol handling, or actuator hardware control.
 
-LOGGER = logging.getLogger("sprayshark")
+Related modules:
+    - robot_controller.py: Coordinates robot control logic.
+    - components/bluetooth.py: Receives and decodes phone input.
+    - components/esp32_interface.py: Communicates with the ESP32.
 
-
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    shutdown = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
-
-    esp32 = None
-    keyboard = None
-    controller = None
-    return_code = 0
-    try:
-        esp32 = Esp32Interface("/dev/ttyACM0")
-        keyboard = EvdevKeyboard()
-        controller = RobotController(keyboard, esp32)
-        controller.run(shutdown.is_set)
-    except KeyboardInterrupt:
-        LOGGER.info("Shutdown requested")
-    except (Esp32CommunicationError, KeyboardInputError) as exc:
-        LOGGER.error("%s", exc)
-        return_code = 1
-    finally:
-        if controller is not None:
-            try:
-                controller.stop()
-            except Esp32CommunicationError as exc:
-                LOGGER.error("Could not send actuator STOP during shutdown: %s", exc)
-                return_code = 1
-        elif esp32 is not None:
-            try:
-                esp32.send_command("ACTUATOR_STOP")
-            except Esp32CommunicationError as exc:
-                LOGGER.error("Could not send actuator STOP during shutdown: %s", exc)
-                return_code = 1
-        if keyboard is not None:
-            try:
-                keyboard.close()
-            except OSError as exc:
-                LOGGER.error("Could not close keyboard input: %s", exc)
-                return_code = 1
-        if esp32 is not None:
-            try:
-                esp32.close()
-            except Esp32CommunicationError as exc:
-                LOGGER.error("%s", exc)
-                return_code = 1
-
-    return return_code
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+Hardware control is implemented in the ESP32 firmware, in the esp32 directory. 
+The Raspberry Pi application sends commands to the ESP32, which then controls the actuators.
+"""

@@ -59,17 +59,20 @@ references until confirmed for the current build.
 -   Raspberry Pi is used for high-level control and Python code.
 -   `firmware/rpi/main.py` runs the actuator controller when invoked
     directly on the Pi (for example, `python3 firmware/rpi/main.py`).
--   `firmware/rpi/robot_controller.py` reads physical USB keyboard
-    key-down/key-up events through `evdev`; `A` retracts, `D` extends,
-    releasing either direction stops, and `Q` stops and exits. Holding
-    both A and D stops as a safety behavior.
+-   `firmware/rpi/robot_controller.py` reads terminal commands after
+    Enter: `a` retracts, `d` extends, `s` stops, and `q` stops and exits.
+    Movement remains active until another command is entered.
 -   The controller sends `ACTUATOR_LEFT`, `ACTUATOR_RIGHT`, and
     `ACTUATOR_STOP` through `firmware/rpi/components/esp32_interface.py`.
 -   `firmware/rpi/components/esp32_interface.py` opens `/dev/ttyACM0`
     at 115200 baud and writes each command followed by a newline.
+-   `firmware/rpi/main.py` logs detected serial devices, keyboard events,
+    console commands, commands written, and serial connection statistics
+    to the console.
+    These statistics confirm host-side writes only; the command protocol
+    does not acknowledge receipt from the ESP32.
 -   On the Pi, install the runtime dependencies with
-    `sudo apt install python3-evdev python3-serial`. The evdev device
-    permissions must allow the running user to read the keyboard.
+    `sudo apt install python3-serial`.
 -   Raspberry Pi 5 accessories discussed include an active cooler, an
     NVMe M.2 HAT, a 128 GB NVMe SSD, and a Pi camera.
 -   Camera note: a Raspberry Pi NoIR camera was previously not detected
@@ -136,18 +139,16 @@ Recorded ESP-IDF environment details from that experiment:
 -   `ACTUATOR_LEFT` calls `actuatorLeft()` (retract); `ACTUATOR_RIGHT`
       calls `actuatorRight()` (extend); `ACTUATOR_STOP` calls
       `actuatorStop()`.
--   The ESP32 does not apply a movement heartbeat/timeout. The Pi emits
-      a direction command on key-down and an explicit STOP on key-up, so
-      timing out an otherwise-held key would stop motion prematurely.
+-   The Pi emits an active direction heartbeat while waiting for the
+      next terminal command; enter `s` to stop movement.
 -   Unknown or oversized command lines cause the ESP32 to stop the
       actuator as a fail-safe. Startup also initializes the actuator
       stopped.
 -   The Pi handles the `Q` exit path by stopping the actuator before
       shutdown.
--   Rationale: use evdev's real key-down/key-up events for momentary
-      actuator control, rather than relying on repeated polling of a
-      gamepad/Bluetooth state; underscore-separated tokens make the wire
-      commands explicit and consistent across Pi and ESP32.
+-   The Pi accepts each action as a terminal command followed by Enter;
+      underscore-separated tokens make the wire commands explicit and
+      consistent across Pi and ESP32.
 -   Arduino CLI compilation succeeded for `esp32:esp32:esp32`; this
       verifies compilation only, not USB serial behavior or actuator
       operation on hardware.

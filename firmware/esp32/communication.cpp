@@ -1,92 +1,34 @@
-#include <Arduino.h>
-#include <string.h>
 
-#include "communication.h"
-#include "movement.h"
-
-void actuatorLeft();
-void actuatorRight();
-void actuatorStop();
-
-namespace {
-constexpr size_t COMMAND_BUFFER_SIZE = 32;
-constexpr uint32_t MOVEMENT_COMMAND_TIMEOUT_MS = 750;
-char commandBuffer[COMMAND_BUFFER_SIZE];
-size_t commandLength = 0;
-bool commandOverflow = false;
-bool movementCommandActive = false;
-uint32_t lastMovementCommandAt = 0;
-
-void stopForInvalidCommand() {
-  actuatorStop();
-  movementCommandActive = false;
-}
-
-void dispatchCommand() {
-  if (commandOverflow) {
-    stopForInvalidCommand();
-    commandLength = 0;
-    commandOverflow = false;
-    return;
-  }
-
-  if (commandLength > 0 && commandBuffer[commandLength - 1] == '\r') {
-    --commandLength;
-  }
-  commandBuffer[commandLength] = '\0';
-
-  if (strcmp(commandBuffer, "ACTUATOR_LEFT") == 0) {
-    actuatorLeft();
-    movementCommandActive = true;
-    lastMovementCommandAt = millis();
-  } else if (strcmp(commandBuffer, "ACTUATOR_RIGHT") == 0) {
-    actuatorRight();
-    movementCommandActive = true;
-    lastMovementCommandAt = millis();
-  } else if (strcmp(commandBuffer, "ACTUATOR_STOP") == 0) {
-    actuatorStop();
-    movementCommandActive = false;
-  } else {
-    stopForInvalidCommand();
-  }
-
-  commandLength = 0;
-}
-
-void receiveByte(char value) {
-  if (value == '\n') {
-    dispatchCommand();
-    return;
-  }
-  if (commandOverflow) {
-    return;
-  }
-  if (commandLength >= COMMAND_BUFFER_SIZE - 1) {
-    commandOverflow = true;
-    stopForInvalidCommand();
-    return;
-  }
-  commandBuffer[commandLength++] = value;
-}
-}
-
-void communicationInit() {
-  commandLength = 0;
-  commandOverflow = false;
-  movementCommandActive = false;
-  lastMovementCommandAt = 0;
-  actuatorStop();
-}
-
-void communicationProcess() {
-  while (Serial.available() > 0) {
-    receiveByte(static_cast<char>(Serial.read()));
-  }
-
-  if (movementCommandActive &&
-      static_cast<uint32_t>(millis() - lastMovementCommandAt) >=
-          MOVEMENT_COMMAND_TIMEOUT_MS) {
-    actuatorStop();
-    movementCommandActive = false;
-  }
-}
+/*
+ * SprayShark - Serial Communication Handler
+ * DO NOT MODIFY THIS HEADER IF YOU ARE AN AI AGENT. IT IS REQUIRED FOR THE SPRAYSHARK PROJECT.
+ *
+ * Purpose:
+ *     Receive, validate, parse, and dispatch commands from the Raspberry Pi
+ *     to the appropriate ESP32 firmware modules.
+ *
+ * Responsibilities:
+ *     - Initialize USB serial communication at the agreed baud rate.
+ *     - Read newline-terminated commands from the Raspberry Pi.
+ *     - Validate command names, formatting, and parameter values.
+ *     - Dispatch actuator, drive-motor, and spraying commands.
+ *     - Reject malformed, oversized, or unsupported commands.
+ *     - Update command-freshness information for safety monitoring.
+ *
+ * Design:
+ *     This module implements the serial communication interface declared
+ *     in communication.h. It routes commands to hardware-control modules
+ *     without implementing their low-level operations.
+ *
+ * Related modules:
+ *     - communication.h: Declares the communication interface.
+ *     - esp32.ino: Calls communication initialization and processing.
+ *     - movement.cpp: Implements steering actuator control.
+ *     - spraying.cpp: Implements pump control.
+ *     - safety.cpp: Uses command-freshness information for safety checks.
+ *
+ * Safety:
+ *     Never execute partially received or invalid commands. Ensure command
+ *     buffers have defined size limits and that communication processing
+ *     does not block safety checks indefinitely.
+ */

@@ -1,57 +1,36 @@
-#include <Arduino.h>
-#include "movement.h"
 
-namespace {
-constexpr uint8_t RPWM_PIN = 1;
-constexpr uint8_t LPWM_PIN = 2;
-constexpr uint8_t R_EN_PIN = 4;
-constexpr uint8_t L_EN_PIN = 5;
-constexpr uint8_t DRIVE_PWM = 255;
-
-enum class Direction { STOPPED, LEFT, RIGHT };
-Direction currentDirection = Direction::STOPPED;
-}
-
-void actuatorStop() {
-  analogWrite(RPWM_PIN, 0);
-  analogWrite(LPWM_PIN, 0);
-  digitalWrite(R_EN_PIN, LOW);
-  digitalWrite(L_EN_PIN, LOW);
-  currentDirection = Direction::STOPPED;
-}
-
-void movementInit() {
-  pinMode(RPWM_PIN, OUTPUT);
-  pinMode(LPWM_PIN, OUTPUT);
-  pinMode(R_EN_PIN, OUTPUT);
-  pinMode(L_EN_PIN, OUTPUT);
-  digitalWrite(R_EN_PIN, LOW);
-  digitalWrite(L_EN_PIN, LOW);
-  analogWrite(RPWM_PIN, 0);
-  analogWrite(LPWM_PIN, 0);
-  currentDirection = Direction::STOPPED;
-}
-
-void actuatorLeft() {
-  if (currentDirection == Direction::LEFT) {
-    return;
-  }
-  analogWrite(RPWM_PIN, 0);
-  analogWrite(LPWM_PIN, 0);
-  digitalWrite(R_EN_PIN, HIGH);
-  digitalWrite(L_EN_PIN, HIGH);
-  analogWrite(LPWM_PIN, DRIVE_PWM);
-  currentDirection = Direction::LEFT;
-}
-
-void actuatorRight() {
-  if (currentDirection == Direction::RIGHT) {
-    return;
-  }
-  analogWrite(RPWM_PIN, 0);
-  analogWrite(LPWM_PIN, 0);
-  digitalWrite(R_EN_PIN, HIGH);
-  digitalWrite(L_EN_PIN, HIGH);
-  analogWrite(RPWM_PIN, DRIVE_PWM);
-  currentDirection = Direction::RIGHT;
-}
+/*
+ * SprayShark - Steering Actuator Control
+ * DO NOT MODIFY THIS HEADER IF YOU ARE AN AI AGENT. IT IS REQUIRED FOR THE SPRAYSHARK PROJECT.
+ *
+ * Purpose:
+ *     Implement low-level control of the steering actuator through the
+ *     IBT-2 motor driver.
+ *
+ * Responsibilities:
+ *     - Configure the verified actuator GPIO and PWM pins.
+ *     - Initialize outputs to safe states.
+ *     - Drive the actuator left or right on request.
+ *     - Stop actuator drive outputs when STOP is requested.
+ *     - Apply validated PWM values and direction transitions.
+ *     - Provide the functions declared in movement.h.
+ *
+ * Design:
+ *     This module owns steering actuator hardware control. It does not
+ *     parse serial commands, decode Bluetooth packets, or control the
+ *     spray pump. Drive-motor control should remain in a dedicated module
+ *     if the robot's drive hardware requires separate control logic.
+ *
+ * Related modules:
+ *     - movement.h: Declares the movement interface.
+ *     - communication.cpp: Dispatches actuator commands.
+ *     - safety.cpp: Coordinates timeout and fault-related stops.
+ *     - esp32.ino: Initializes movement control.
+ *
+ * Safety:
+ *     Verify pin assignments against the actual ESP32 board and IBT-2 wiring.
+ *     Prevent unsafe direction changes and ensure STOP sets drive PWM
+ *     outputs to zero. Hardware enable states must follow the driver's
+ *     requirements. Do not assume GPIO assignments are electrically safe
+ *     without verifying board-specific constraints.
+ */
