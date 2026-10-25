@@ -1,0 +1,32 @@
+
+SprayShark/
+├── AGENTS.md
+├── README.md
+│
+├── docs/
+│   ├── index.md
+│   ├── architecture.md
+│   ├── hardware/
+│   │   ├── overview.md
+│   │   └── pinout-and-wiring.md
+│   ├── interfaces/
+│   │   ├── index.md
+│   │   └── ...
+│   ├── design-docs/
+│   │   ├── index.md
+│   │   └── ...
+│   ├── exec-plans/
+│   │   ├── active/
+│   │   ├── completed/
+│   │   └── tech-debt.md
+│   └── quality.md
+│
+├── main_projects/
+│   ├── sprayshark_v2_component/
+│   └── sprayshark_v2_singlefile/
+│
+├── test_files/
+│   └── ...
+│
+└── other_info/
+    └── ...
