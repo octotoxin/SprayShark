@@ -13,7 +13,7 @@ Treat the repository as the source of truth. Inspect the current code and releva
 Before starting a task:
 
 1. Inspect the relevant source files, configuration, tests, and build setup.
-2. Read `context.md` for background, but verify important claims against current code and hardware documentation.
+2. Read `docs/index.md` for background, but verify important claims against current code and hardware documentation.
 3. Read the relevant documents under `docs/` when they exist.
 4. Identify the components affected by the change and any dependencies on other components.
 5. Determine how the change will be tested.
@@ -29,12 +29,12 @@ Clearly distinguish confirmed facts, assumptions, proposed changes, and unverifi
 Use each source for its intended purpose:
 
 - `README.md`: project introduction and getting-started information.
-- `context.md`: project background and historical technical context.
+- `docs/index.md`: project background and documentation map.
 - `docs/architecture.md`: component responsibilities and system architecture.
 - `docs/hardware/`: verified hardware inventory, pin assignments, and wiring.
 - `docs/interfaces/`: communication contracts and component interfaces.
-- `docs/design-docs/`: durable engineering decisions and their rationale.
-- `docs/exec-plans/`: implementation plans and completion records.
+- `docs/design_docs/`: durable engineering decisions and their rationale.
+- `docs/exec_plans/`: implementation plans and completion records.
 - `docs/quality.md`: testing and verification requirements, if present.
 
 Code, configuration, and verified wiring must be inspected before relying on historical notes.
@@ -107,12 +107,12 @@ For a small, isolated change, a brief task description and relevant tests may be
 
 For a change involving several components, safety behavior, hardware interfaces, or significant architectural decisions:
 
-1. Create or update an execution plan under `docs/exec-plans/active/`.
+1. Create or update an execution plan under `docs/exec_plans/active/`.
 2. Record the goal, scope, constraints, dependencies, and acceptance criteria.
 3. Identify the relevant design documents and interfaces.
 4. Implement and verify the change.
 5. Record results, unresolved issues, and hardware-validation requirements.
-6. Move the plan to `docs/exec-plans/completed/` when the work is complete, or explicitly record what remains unfinished.
+6. Move the plan to `docs/exec_plans/completed/` when the work is complete, or explicitly record what remains unfinished.
 
 Record durable architectural decisions in design documents rather than leaving them only in task conversations or execution plans.
 
