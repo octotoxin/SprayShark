@@ -40,6 +40,9 @@ class ESP32Connection(Protocol):
     def ping(self) -> None:
         """Verify that the ESP32 responds to a ping."""
 
+    def set_actuator(self, direction: str) -> str:
+        """Request a mock actuator action and return the ESP32 response."""
+
 
 class RobotController:
     """Coordinate startup checks for the robot's control components."""
@@ -50,3 +53,7 @@ class RobotController:
     def initialize(self) -> None:
         """Verify the ESP32 serial link before the application proceeds."""
         self._esp32.ping()
+
+    def set_actuator(self, direction: str) -> str:
+        """Request a mock actuator action through the ESP32 interface."""
+        return self._esp32.set_actuator(direction)

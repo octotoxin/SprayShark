@@ -37,19 +37,24 @@ ESP32 -> Pi: PONG\n
 The ESP32 ignores unsupported commands. Oversized serial lines are discarded
 until the next newline and do not produce a response.
 
-## 4. Actuator Commands
+## 4. Mock Actuator Commands
 
-The following commands control steering actuator movement.
+The terminal interface on the Raspberry Pi accepts `LEFT`, `RIGHT`, and
+`STOP` and sends the corresponding command to the ESP32. These commands are
+mock-only: the current ESP32 communication handler does not call actuator or
+motor hardware functions.
 
-| Command | Description |
-|---|---|
-| `LEFT` | Move the steering actuator left |
-| `RIGHT` | Move the steering actuator right |
-| `STOP` | Stop actuator movement |
+| Pi terminal input | Pi-to-ESP32 command | ESP32 response |
+|---|---|---|
+| `LEFT` | `ACTUATOR,LEFT` | `MOCK_ACTUATOR,MOVING_LEFT` |
+| `RIGHT` | `ACTUATOR,RIGHT` | `MOCK_ACTUATOR,MOVING_RIGHT` |
+| `STOP` | `ACTUATOR,STOP` | `MOCK_ACTUATOR,STOPPED` |
 
-## 5. Message Format
+The Raspberry Pi displays the matching ESP32 response in the terminal.
+Commands are case-insensitive at the terminal. Use `QUIT` or `EXIT` to leave
+the terminal control loop.
 
-Actuator commands use the following format:
+Each actuator request uses the following newline-terminated format:
 
 ```text
 ACTUATOR,LEFT
@@ -59,13 +64,13 @@ ACTUATOR,STOP
 
 Each message ends with a newline character (`\n`).
 
-## 6. Protocol Compatibility
+## 5. Protocol Compatibility
 
 The Raspberry Pi and ESP32 must use matching command names and message formats.
 
 Any changes to the protocol must be reflected in both codebases.
 
-## 7. Implementation References
+## 6. Implementation References
 
 - Raspberry Pi entry point: `firmware/rpi/main.py`
 - Raspberry Pi serial transport: `firmware/rpi/components/esp32_interface.py`

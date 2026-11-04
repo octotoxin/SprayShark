@@ -52,11 +52,33 @@ def main() -> int:
 
     try:
         with ESP32Interface(args.port) as esp32:
-            RobotController(esp32).initialize()
+            controller = RobotController(esp32)
+            controller.initialize()
+            print("ESP32 ping succeeded.")
+            print("Enter LEFT, RIGHT, STOP, or QUIT.")
+
+            while True:
+                try:
+                    command = input("> ").strip().upper()
+                except EOFError:
+                    print()
+                    break
+
+                if command in ("QUIT", "EXIT"):
+                    break
+                if command not in ("LEFT", "RIGHT", "STOP"):
+                    print("Invalid command. Enter LEFT, RIGHT, STOP, or QUIT.")
+                    continue
+
+                try:
+                    response = controller.set_actuator(command)
+                except (OSError, TimeoutError, RuntimeError) as error:
+                    print(f"ESP32 command failed: {error}")
+                    continue
+                print(f"ESP32: {response}")
     except (OSError, TimeoutError, RuntimeError) as error:
         parser.exit(1, f"ESP32 initialization failed: {error}\n")
 
-    print("ESP32 ping succeeded.")
     return 0
 
 

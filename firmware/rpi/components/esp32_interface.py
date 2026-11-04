@@ -46,6 +46,11 @@ class ESP32Interface:
 
     BAUD_RATE = 115200
     SERIAL_TIMEOUT_SECONDS = 1.0
+    ACTUATOR_RESPONSES = {
+        "LEFT": "MOCK_ACTUATOR,MOVING_LEFT",
+        "RIGHT": "MOCK_ACTUATOR,MOVING_RIGHT",
+        "STOP": "MOCK_ACTUATOR,STOPPED",
+    }
 
     def __init__(self, port: str) -> None:
         if not port:
@@ -64,13 +69,44 @@ class ESP32Interface:
         self._serial.write(b"PING\n")
         self._serial.flush()
 
-        response = self._serial.readline().rstrip(b"\r\n")
+        response = self._read_response()
         if not response:
             raise TimeoutError("Timed out waiting for the ESP32 PONG response.")
-        if response != b"PONG":
+        if response != "PONG":
             raise RuntimeError(
                 f"Unexpected response to ESP32 PING: {response!r}"
             )
+
+    def set_actuator(self, direction: str) -> str:
+        """Request a mock actuator action and return the ESP32 confirmation."""
+        direction = direction.upper()
+        if direction not in self.ACTUATOR_RESPONSES:
+            raise ValueError(f"Unsupported actuator command: {direction!r}")
+
+        command = f"ACTUATOR,{direction}\n".encode("ascii")
+        self._serial.write(command)
+        self._serial.flush()
+
+        response = self._read_response()
+        if not response:
+            raise TimeoutError(
+                f"Timed out waiting for the ESP32 {direction} confirmation."
+            )
+
+        expected = self.ACTUATOR_RESPONSES[direction]
+        if response != expected:
+            raise RuntimeError(
+                f"Unexpected response to {direction}: {response!r}; "
+                f"expected {expected!r}"
+            )
+        return response
+
+    def _read_response(self) -> str:
+        response = self._serial.readline().rstrip(b"\r\n")
+        try:
+            return response.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise RuntimeError("ESP32 returned a non-ASCII response.") from error
 
     def close(self) -> None:
         self._serial.close()

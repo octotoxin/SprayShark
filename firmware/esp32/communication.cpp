@@ -47,6 +47,12 @@ void processCommand() {
     commandBuffer[commandLength] = '\0';
     if (strcmp(commandBuffer, "PING") == 0) {
         Serial.println("PONG");
+    } else if (strcmp(commandBuffer, "ACTUATOR,LEFT") == 0) {
+        Serial.println("MOCK_ACTUATOR,MOVING_LEFT");
+    } else if (strcmp(commandBuffer, "ACTUATOR,RIGHT") == 0) {
+        Serial.println("MOCK_ACTUATOR,MOVING_RIGHT");
+    } else if (strcmp(commandBuffer, "ACTUATOR,STOP") == 0) {
+        Serial.println("MOCK_ACTUATOR,STOPPED");
     }
     commandLength = 0;
 }
