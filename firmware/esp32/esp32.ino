@@ -31,3 +31,13 @@
  *     commands. Ensure periodic safety processing cannot be skipped during
  *     normal firmware operation.
  */
+
+#include "communication.h"
+
+void setup() {
+    communicationInit();
+}
+
+void loop() {
+    communicationProcess();
+}

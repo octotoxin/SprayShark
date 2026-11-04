@@ -32,3 +32,21 @@ Safety:
     The ESP32 must independently enforce actuator stop behavior if
     commands stop arriving. Raspberry Pi safeguards are supplementary.
 """
+
+from typing import Protocol
+
+
+class ESP32Connection(Protocol):
+    def ping(self) -> None:
+        """Verify that the ESP32 responds to a ping."""
+
+
+class RobotController:
+    """Coordinate startup checks for the robot's control components."""
+
+    def __init__(self, esp32: ESP32Connection) -> None:
+        self._esp32 = esp32
+
+    def initialize(self) -> None:
+        """Verify the ESP32 serial link before the application proceeds."""
+        self._esp32.ping()

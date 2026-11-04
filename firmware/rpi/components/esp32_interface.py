@@ -37,3 +37,46 @@ Safety:
     independently enforce a command timeout and stop the actuator
     if valid commands stop arriving.
 """
+
+import serial
+
+
+class ESP32Interface:
+    """Manage the Raspberry Pi's USB serial connection to the ESP32."""
+
+    BAUD_RATE = 115200
+    SERIAL_TIMEOUT_SECONDS = 1.0
+
+    def __init__(self, port: str) -> None:
+        if not port:
+            raise ValueError("A serial port must be specified for the ESP32.")
+
+        self._serial = serial.Serial(
+            port=port,
+            baudrate=self.BAUD_RATE,
+            timeout=self.SERIAL_TIMEOUT_SECONDS,
+            write_timeout=self.SERIAL_TIMEOUT_SECONDS,
+        )
+
+    def ping(self) -> None:
+        """Send PING and require the matching PONG response."""
+        self._serial.reset_input_buffer()
+        self._serial.write(b"PING\n")
+        self._serial.flush()
+
+        response = self._serial.readline().rstrip(b"\r\n")
+        if not response:
+            raise TimeoutError("Timed out waiting for the ESP32 PONG response.")
+        if response != b"PONG":
+            raise RuntimeError(
+                f"Unexpected response to ESP32 PING: {response!r}"
+            )
+
+    def close(self) -> None:
+        self._serial.close()
+
+    def __enter__(self) -> "ESP32Interface":
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        self.close()

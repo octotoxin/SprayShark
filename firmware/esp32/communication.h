@@ -29,3 +29,11 @@
  *     Commands must be validated before execution. Malformed, incomplete,
  *     or unsupported commands must not activate hardware.
  */
+
+#ifndef SPRAYSHARK_COMMUNICATION_H
+#define SPRAYSHARK_COMMUNICATION_H
+
+void communicationInit();
+void communicationProcess();
+
+#endif

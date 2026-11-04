@@ -32,3 +32,55 @@
  *     buffers have defined size limits and that communication processing
  *     does not block safety checks indefinitely.
  */
+
+#include "communication.h"
+
+#include <Arduino.h>
+
+namespace {
+constexpr size_t COMMAND_BUFFER_SIZE = 32;
+char commandBuffer[COMMAND_BUFFER_SIZE];
+size_t commandLength = 0;
+bool discardUntilNewline = false;
+
+void processCommand() {
+    commandBuffer[commandLength] = '\0';
+    if (strcmp(commandBuffer, "PING") == 0) {
+        Serial.println("PONG");
+    }
+    commandLength = 0;
+}
+}  // namespace
+
+void communicationInit() {
+    Serial.begin(115200);
+}
+
+void communicationProcess() {
+    while (Serial.available() > 0) {
+        const char incoming = static_cast<char>(Serial.read());
+
+        if (incoming == '\n') {
+            if (!discardUntilNewline) {
+                if (commandLength > 0 && commandBuffer[commandLength - 1] == '\r') {
+                    --commandLength;
+                }
+                processCommand();
+            } else {
+                commandLength = 0;
+                discardUntilNewline = false;
+            }
+            continue;
+        }
+
+        if (discardUntilNewline) {
+            continue;
+        }
+        if (commandLength >= COMMAND_BUFFER_SIZE - 1) {
+            commandLength = 0;
+            discardUntilNewline = true;
+            continue;
+        }
+        commandBuffer[commandLength++] = incoming;
+    }
+}

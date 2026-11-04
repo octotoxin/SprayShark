@@ -26,3 +26,39 @@ Related modules:
 Hardware control is implemented in the ESP32 firmware, in the esp32 directory. 
 The Raspberry Pi application sends commands to the ESP32, which then controls the actuators.
 """
+
+import argparse
+import os
+
+if __package__:
+    from .components.esp32_interface import ESP32Interface
+    from .robot_controller import RobotController
+else:
+    from components.esp32_interface import ESP32Interface
+    from robot_controller import RobotController
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Start the SprayShark Pi controller.")
+    parser.add_argument(
+        "--port",
+        default=os.environ.get("SPRAYSHARK_SERIAL_PORT", "/dev/ttyACM0"),
+        help=(
+            "ESP32 serial device (default: /dev/ttyACM0; "
+            "overridden by SPRAYSHARK_SERIAL_PORT)"
+        ),
+    )
+    args = parser.parse_args()
+
+    try:
+        with ESP32Interface(args.port) as esp32:
+            RobotController(esp32).initialize()
+    except (OSError, TimeoutError, RuntimeError) as error:
+        parser.exit(1, f"ESP32 initialization failed: {error}\n")
+
+    print("ESP32 ping succeeded.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
