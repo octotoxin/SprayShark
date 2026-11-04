@@ -12,7 +12,7 @@ Do not assume that different communication paths use the same protocol.
 
 | Interface | Connected components | Specification | Status |
 |---|---|---|---|
-| Bluetooth / Dabble | Operator application ↔ ESP32 | `bluetooth-dabble.md` | Existing behavior to document and verify |
+| Bluetooth / Dabble | Operator application ↔ Raspberry Pi | `bluetooth-dabble.md` | Existing behavior to document and verify |
 | USB serial | Raspberry Pi ↔ ESP32 | `pi-esp32-serial.md` | Verify the protocol used by the current application |
 | Motor-controller serial | ESP32 ↔ RoboClaw | `esp32-roboclaw.md` | Existing configuration and behavior to document and verify |
 
